@@ -1,0 +1,7 @@
+[project]
+name = "bitwispr"
+version = "0.1.0"
+description = "BitNet version of Whisper from OpenAI"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
