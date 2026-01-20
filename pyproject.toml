@@ -1,7 +1,14 @@
 [project]
 name = "bitwispr"
 version = "0.1.0"
-description = "BitNet version of Whisper from OpenAI"
+description = "Voice-to-text using Whisper with real-time transcription"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "faster-whisper",
+    "sounddevice",
+    "numpy",
+    "pynput",
+    "evdev",
+    "scipy",
+]
