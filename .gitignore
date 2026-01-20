@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+bitwisp.service
+install-service.sh
