@@ -9,7 +9,6 @@ For Wayland: Run with sudo or add user to input group:
 
 import os
 import sys
-import time
 import threading
 import subprocess
 import queue
@@ -48,8 +47,11 @@ print("=" * 55 + "\n")
 
 # Global state
 recording = False
+transcribing = False  # Track if transcription is in progress
 audio_queue = queue.Queue()
-typed_text = ""  # Track what we've already typed
+typed_text = ""
+transcribe_event = threading.Event()  # Signal to transcribe
+worker_thread = None
 
 
 def resample_audio(audio_data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
@@ -107,58 +109,56 @@ def type_text(text: str):
             print(f"   Text was: {text}")
 
 def transcription_worker():
-    """Worker thread that collects audio and transcribes when recording stops."""
-    global typed_text, recording
+    """Persistent worker thread that waits for transcription requests."""
+    global typed_text, transcribing
 
-    audio_buffer = []
+    while True:
+        # Wait for signal to transcribe
+        transcribe_event.wait()
+        transcribe_event.clear()
+        
+        transcribing = True
 
-    # Collect audio while recording
-    while recording:
+        # Collect all audio from queue
+        audio_buffer = []
         try:
             while True:
                 chunk = audio_queue.get_nowait()
                 audio_buffer.extend(chunk.tolist())
         except queue.Empty:
             pass
-        time.sleep(0.05)
 
-    # Drain remaining audio from queue
-    try:
-        while True:
-            chunk = audio_queue.get_nowait()
-            audio_buffer.extend(chunk.tolist())
-    except queue.Empty:
-        pass
+        if len(audio_buffer) > DEVICE_SAMPLE_RATE * 0.3:  # At least 0.3s of audio
+            print("🔄 Transcribing...")
+            
+            final_audio = np.array(audio_buffer, dtype=np.float32)
+            final_audio_16k = resample_audio(final_audio, DEVICE_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
 
-    if len(audio_buffer) > DEVICE_SAMPLE_RATE * 0.3:  # At least 0.3s of audio
-        print("🔄 Transcribing...")
+            try:
+                segments, _ = model.transcribe(
+                    final_audio_16k,
+                    beam_size=5,
+                    vad_filter=True,
+                )
+
+                final_text = ""
+                for segment in segments:
+                    final_text += segment.text
+                final_text = final_text.strip()
+
+                if final_text:
+                    print(f"✅ {final_text}")
+                    type_text(final_text + " ")
+                    typed_text = final_text
+                else:
+                    print("No speech detected.")
+
+            except Exception as e:
+                print(f"Transcription error: {e}")
+        else:
+            print("Recording too short.")
         
-        final_audio = np.array(audio_buffer, dtype=np.float32)
-        final_audio_16k = resample_audio(final_audio, DEVICE_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
-
-        try:
-            segments, _ = model.transcribe(
-                final_audio_16k,
-                beam_size=5,
-                vad_filter=True,
-            )
-
-            final_text = ""
-            for segment in segments:
-                final_text += segment.text
-            final_text = final_text.strip()
-
-            if final_text:
-                print(f"✅ {final_text}")
-                type_text(final_text + " ")
-                typed_text = final_text
-            else:
-                print("No speech detected.")
-
-        except Exception as e:
-            print(f"Transcription error: {e}")
-    else:
-        print("Recording too short.")
+        transcribing = False
 
 def audio_callback(indata, frames, time_info, status):
     """Callback for audio stream - adds audio to queue."""
@@ -167,8 +167,18 @@ def audio_callback(indata, frames, time_info, status):
         audio_queue.put(indata[:, 0].copy())
 
 def start_recording():
-    """Start recording and real-time transcription."""
-    global recording, typed_text
+    """Start recording audio."""
+    global recording, typed_text, worker_thread
+
+    # Don't start if transcription is in progress
+    if transcribing:
+        print("⏳ Please wait, transcription in progress...")
+        return False
+
+    # Start worker thread once (on first recording)
+    if worker_thread is None:
+        worker_thread = threading.Thread(target=transcription_worker, daemon=True)
+        worker_thread.start()
 
     # Clear the audio queue
     while not audio_queue.empty():
@@ -181,16 +191,16 @@ def start_recording():
     recording = True
 
     print("\n🎙️  Recording started... (Press Shift+Tab to stop)")
-
-    # Start transcription worker
-    transcribe_thread = threading.Thread(target=transcription_worker, daemon=True)
-    transcribe_thread.start()
+    return True
 
 def stop_recording():
-    """Stop recording."""
+    """Stop recording and trigger transcription."""
     global recording
     recording = False
     print("⏹️  Recording stopped.\n")
+    
+    # Signal the worker to transcribe
+    transcribe_event.set()
 
 def run_with_evdev():
     """Use evdev for keyboard listening (works on Wayland with proper permissions)."""
@@ -268,10 +278,8 @@ def run_with_evdev():
                                         print("=" * 40)
                                         stop_recording()
                                     else:
-                                        print("\n" + "=" * 40)
-                                        print("🎙️  STARTED RECORDING - Speak now!")
-                                        print("=" * 40)
-                                        start_recording()
+                                        if start_recording():
+                                            print("=" * 40)
 
     except KeyboardInterrupt:
         print("\nExiting...")
@@ -308,10 +316,8 @@ def run_with_pynput():
                     print("=" * 40)
                     stop_recording()
                 else:
-                    print("\n" + "=" * 40)
-                    print("🎙️  STARTED RECORDING - Speak now!")
-                    print("=" * 40)
-                    start_recording()
+                    if start_recording():
+                        print("=" * 40)
 
     def on_release(key):
         nonlocal combo_pressed
