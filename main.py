@@ -74,7 +74,7 @@ def type_text(text: str):
             result = subprocess.run(
                 ["ydotool", "type", "--", text],
                 capture_output=True,
-                timeout=5,
+                timeout=30,
             )
             if result.returncode == 0:
                 return
@@ -85,7 +85,7 @@ def type_text(text: str):
             result = subprocess.run(
                 ["wtype", "--", text],
                 capture_output=True,
-                timeout=5,
+                timeout=30,
             )
             if result.returncode == 0:
                 return
@@ -211,25 +211,20 @@ def run_with_evdev():
         print("❌ evdev not installed. Run: uv add evdev")
         sys.exit(1)
 
-    # Find actual keyboard devices (not touchpad, mouse, etc.)
+    # Find actual keyboard devices
     devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
     keyboards = []
     for d in devices:
         caps = d.capabilities()
-        # Must have EV_KEY capability
         if ecodes.EV_KEY not in caps:
             continue
-        # Check if it has actual keyboard keys (letters, not just buttons)
         key_caps = caps.get(ecodes.EV_KEY, [])
-        # Look for letter keys (KEY_A = 30, KEY_Z = 44) or KEY_TAB (15)
         has_keyboard_keys = any(k in key_caps for k in [ecodes.KEY_A, ecodes.KEY_TAB, ecodes.KEY_LEFTSHIFT])
         if has_keyboard_keys:
             keyboards.append(d)
 
     if not keyboards:
-        print("❌ No keyboard found. Make sure you have permission to access /dev/input/")
-        print("   Run: sudo usermod -aG input $USER")
-        print("   Then log out and back in.")
+        print("❌ No keyboard found. Check permissions.")
         sys.exit(1)
 
     print(f"Found {len(keyboards)} keyboard device(s):")
@@ -238,22 +233,22 @@ def run_with_evdev():
 
     # Track key states
     shift_pressed = False
+    ctrl_pressed = False
+    alt_pressed = False
+    meta_pressed = False
 
-    # Open audio stream with larger blocksize to prevent overflow
     stream = sd.InputStream(
         samplerate=DEVICE_SAMPLE_RATE,
         channels=1,
         callback=audio_callback,
-        blocksize=int(DEVICE_SAMPLE_RATE * 0.2),  # 200ms blocks
+        blocksize=int(DEVICE_SAMPLE_RATE * 0.2),
     )
     stream.start()
 
-    print("Listening for Shift+Tab... (press Ctrl+C to quit)\n")
+    print("Listening for strict Shift+Tab... (press Ctrl+C to quit)\n")
 
     try:
-        # Listen to all keyboards
         from selectors import DefaultSelector, EVENT_READ
-
         selector = DefaultSelector()
         for kbd in keyboards:
             selector.register(kbd, EVENT_READ)
@@ -263,23 +258,33 @@ def run_with_evdev():
                 device = key.fileobj
                 for event in device.read():
                     if event.type == ecodes.EV_KEY:
-                        # Track Shift
+                        val = event.value  # 1=press, 0=release, 2=hold
+                        
+                        # --- Track Modifier States ---
                         if event.code in (ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT):
-                            shift_pressed = event.value != 0  # 1=press, 0=release, 2=hold
+                            shift_pressed = (val != 0)
+                        elif event.code in (ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL):
+                            ctrl_pressed = (val != 0)
+                        elif event.code in (ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT):
+                            alt_pressed = (val != 0)
+                        elif event.code in (ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA):
+                            meta_pressed = (val != 0)
 
-                        # Track Tab and trigger on Shift+Tab
-                        if event.code == ecodes.KEY_TAB:
-                            if event.value == 1:  # Key press (not hold/release)
-                                if shift_pressed:
-                                    # Toggle recording
-                                    if recording:
-                                        print("\n" + "=" * 40)
-                                        print("⏹️  STOPPED RECORDING")
+                        # --- Trigger Logic ---
+                        if event.code == ecodes.KEY_TAB and val == 1:
+                            # Strict check: Shift MUST be down, others MUST be up
+                            if shift_pressed and not (ctrl_pressed or alt_pressed or meta_pressed):
+                                if recording:
+                                    print("\n" + "=" * 40)
+                                    print("⏹️  STOPPED RECORDING")
+                                    print("=" * 40)
+                                    stop_recording()
+                                else:
+                                    if start_recording():
                                         print("=" * 40)
-                                        stop_recording()
-                                    else:
-                                        if start_recording():
-                                            print("=" * 40)
+                            elif shift_pressed and ctrl_pressed:
+                                print("Ignoring Ctrl+Shift+Tab")
+                                pass
 
     except KeyboardInterrupt:
         print("\nExiting...")
@@ -294,12 +299,19 @@ def run_with_pynput():
     current_keys = set()
     combo_pressed = False
 
-    # Open audio stream with larger blocksize to prevent overflow
+    # Define keys that must NOT be pressed
+    forbidden_modifiers = {
+        keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
+        keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
+        keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r,
+        keyboard.Key.media_play_pause
+    }
+
     stream = sd.InputStream(
         samplerate=DEVICE_SAMPLE_RATE,
         channels=1,
         callback=audio_callback,
-        blocksize=int(DEVICE_SAMPLE_RATE * 0.2),  # 200ms blocks
+        blocksize=int(DEVICE_SAMPLE_RATE * 0.2),
     )
     stream.start()
 
@@ -307,17 +319,24 @@ def run_with_pynput():
         nonlocal combo_pressed
         current_keys.add(key)
 
+        # Check for Shift + Tab
         if keyboard.Key.shift in current_keys and keyboard.Key.tab in current_keys:
-            if not combo_pressed:
-                combo_pressed = True
-                if recording:
-                    print("\n" + "=" * 40)
-                    print("⏹️  STOPPED RECORDING")
-                    print("=" * 40)
-                    stop_recording()
-                else:
-                    if start_recording():
+            
+            # STRICT CHECK: Ensure no forbidden modifiers are currently held
+            # We use set intersection: if the result is not empty, a forbidden key is held
+            if not current_keys.intersection(forbidden_modifiers):
+                if not combo_pressed:
+                    combo_pressed = True
+                    if recording:
+                        print("\n" + "=" * 40)
+                        print("⏹️  STOPPED RECORDING")
                         print("=" * 40)
+                        stop_recording()
+                    else:
+                        if start_recording():
+                            print("=" * 40)
+            else:
+                pass
 
     def on_release(key):
         nonlocal combo_pressed
@@ -325,10 +344,12 @@ def run_with_pynput():
             current_keys.remove(key)
         except KeyError:
             pass
+        
+        # Reset combo latch when Tab is released
         if key == keyboard.Key.tab:
             combo_pressed = False
 
-    print("Listening for Shift+Tab... (press Ctrl+C to quit)\n")
+    print("Listening for strict Shift+Tab... (press Ctrl+C to quit)\n")
 
     try:
         with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
