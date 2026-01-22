@@ -42,7 +42,7 @@ print(f"Loading Whisper model '{MODEL_SIZE}'... please wait.")
 
 model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
 print("Model loaded successfully!")
-print("Hotkey: Shift+Tab (toggle recording on/off)")
+print("Hotkey: Right Alt (toggle recording on/off)")
 print("=" * 55 + "\n")
 
 # Global state
@@ -190,7 +190,7 @@ def start_recording():
     typed_text = ""
     recording = True
 
-    print("\n🎙️  Recording started... (Press Shift+Tab to stop)")
+    print("\n🎙️  Recording started... (Press Right Alt to stop)")
     return True
 
 def stop_recording():
