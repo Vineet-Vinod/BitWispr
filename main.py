@@ -1,6 +1,6 @@
 """
 BitWispr - Speech to Text using Whisper
-Press Shift+Tab to toggle recording on/off.
+Press Right Alt to toggle recording on/off.
 
 For Wayland: Run with sudo or add user to input group:
     sudo usermod -aG input $USER
@@ -231,12 +231,6 @@ def run_with_evdev():
     for kbd in keyboards:
         print(f"  - {kbd.name}")
 
-    # Track key states
-    shift_pressed = False
-    ctrl_pressed = False
-    alt_pressed = False
-    meta_pressed = False
-
     stream = sd.InputStream(
         samplerate=DEVICE_SAMPLE_RATE,
         channels=1,
@@ -245,8 +239,7 @@ def run_with_evdev():
     )
     stream.start()
 
-    print("Listening for strict Shift+Tab... (press Ctrl+C to quit)\n")
-
+    print("Listening for Right Alt...\n")
     try:
         from selectors import DefaultSelector, EVENT_READ
         selector = DefaultSelector()
@@ -257,35 +250,17 @@ def run_with_evdev():
             for key, _ in selector.select():
                 device = key.fileobj
                 for event in device.read():
+                    # Only look for Key events
                     if event.type == ecodes.EV_KEY:
-                        val = event.value  # 1=press, 0=release, 2=hold
-                        
-                        # --- Track Modifier States ---
-                        if event.code in (ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT):
-                            shift_pressed = (val != 0)
-                        elif event.code in (ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL):
-                            ctrl_pressed = (val != 0)
-                        elif event.code in (ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT):
-                            alt_pressed = (val != 0)
-                        elif event.code in (ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA):
-                            meta_pressed = (val != 0)
-
-                        # --- Trigger Logic ---
-                        if event.code == ecodes.KEY_TAB and val == 1:
-                            # Strict check: Shift MUST be down, others MUST be up
-                            if shift_pressed and not (ctrl_pressed or alt_pressed or meta_pressed):
-                                if recording:
-                                    print("\n" + "=" * 40)
-                                    print("⏹️  STOPPED RECORDING")
-                                    print("=" * 40)
-                                    stop_recording()
-                                else:
-                                    if start_recording():
-                                        print("=" * 40)
-                            elif shift_pressed and ctrl_pressed:
-                                print("Ignoring Ctrl+Shift+Tab")
-                                pass
-
+                        # event.code: The key identity
+                        # event.value: 1 = press, 0 = release
+                        if event.code == ecodes.KEY_RIGHTALT and event.value == 1:
+                            if recording:
+                                print(f"\n{'='*40}\n⏹️  STOPPED RECORDING\n{'='*40}")
+                                stop_recording()
+                            else:
+                                if start_recording():
+                                    print('='*40)
     except KeyboardInterrupt:
         print("\nExiting...")
     finally:
@@ -293,72 +268,25 @@ def run_with_evdev():
         stream.close()
 
 def run_with_pynput():
-    """Use pynput for keyboard listening (works on X11)."""
     from pynput import keyboard
 
-    current_keys = set()
-    combo_pressed = False
-
-    # Define keys that must NOT be pressed
-    forbidden_modifiers = {
-        keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
-        keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
-        keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r,
-        keyboard.Key.media_play_pause
-    }
-
-    stream = sd.InputStream(
-        samplerate=DEVICE_SAMPLE_RATE,
-        channels=1,
-        callback=audio_callback,
-        blocksize=int(DEVICE_SAMPLE_RATE * 0.2),
-    )
-    stream.start()
-
     def on_press(key):
-        nonlocal combo_pressed
-        current_keys.add(key)
-
-        # Check for Shift + Tab
-        if keyboard.Key.shift in current_keys and keyboard.Key.tab in current_keys:
-            
-            # STRICT CHECK: Ensure no forbidden modifiers are currently held
-            # We use set intersection: if the result is not empty, a forbidden key is held
-            if not current_keys.intersection(forbidden_modifiers):
-                if not combo_pressed:
-                    combo_pressed = True
-                    if recording:
-                        print("\n" + "=" * 40)
-                        print("⏹️  STOPPED RECORDING")
-                        print("=" * 40)
-                        stop_recording()
-                    else:
-                        if start_recording():
-                            print("=" * 40)
+        # pynput usually identifies Right Alt as keyboard.Key.alt_r
+        if key == keyboard.Key.alt_r:
+            if recording:
+                print(f"\n{'='*40}\n⏹️  STOPPED RECORDING\n{'='*40}")
+                stop_recording()
             else:
-                pass
+                if start_recording():
+                    print('='*40)
 
-    def on_release(key):
-        nonlocal combo_pressed
-        try:
-            current_keys.remove(key)
-        except KeyError:
-            pass
-        
-        # Reset combo latch when Tab is released
-        if key == keyboard.Key.tab:
-            combo_pressed = False
-
-    print("Listening for strict Shift+Tab... (press Ctrl+C to quit)\n")
+    print("Listening for Right Alt...\n")
 
     try:
-        with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+        with keyboard.Listener(on_press=on_press) as listener:
             listener.join()
     except KeyboardInterrupt:
         print("\nExiting...")
-    finally:
-        stream.stop()
-        stream.close()
 
 def main():
     if IS_WAYLAND:
