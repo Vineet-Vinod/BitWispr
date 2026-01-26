@@ -1,6 +1,6 @@
 """
 BitWispr - Speech to Text using Whisper
-Press Right Alt to toggle recording on/off.
+Press Right Ctrl+Alt to toggle recording on/off.
 
 For Wayland: Run with sudo or add user to input group:
     sudo usermod -aG input $USER
@@ -42,7 +42,7 @@ print(f"Loading Whisper model '{MODEL_SIZE}'... please wait.")
 
 model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
 print("Model loaded successfully!")
-print("Hotkey: Right Alt (toggle recording on/off)")
+print("Hotkey: Right Ctrl+Alt (toggle recording on/off)")
 print("=" * 55 + "\n")
 
 # Global state
@@ -190,7 +190,7 @@ def start_recording():
     typed_text = ""
     recording = True
 
-    print("\n🎙️  Recording started... (Press Right Alt to stop)")
+    print("\n🎙️  Recording started... (Press Right Ctrl+Alt to stop)")
     return True
 
 def stop_recording():
@@ -219,6 +219,7 @@ def run_with_evdev():
         if ecodes.EV_KEY not in caps:
             continue
         key_caps = caps.get(ecodes.EV_KEY, [])
+        # Check for common keys to identify real keyboards
         has_keyboard_keys = any(k in key_caps for k in [ecodes.KEY_A, ecodes.KEY_TAB, ecodes.KEY_LEFTSHIFT])
         if has_keyboard_keys:
             keyboards.append(d)
@@ -239,7 +240,15 @@ def run_with_evdev():
     )
     stream.start()
 
-    print("Listening for Right Alt...\n")
+    print("Listening for Right Ctrl+Alt...\n")
+    
+    # State tracking for the specific keys we care about
+    # 1 = pressed, 0 = released
+    key_states = {
+        ecodes.KEY_RIGHTCTRL: False,
+        ecodes.KEY_RIGHTALT: False
+    }
+
     try:
         from selectors import DefaultSelector, EVENT_READ
         selector = DefaultSelector()
@@ -250,17 +259,23 @@ def run_with_evdev():
             for key, _ in selector.select():
                 device = key.fileobj
                 for event in device.read():
-                    # Only look for Key events
                     if event.type == ecodes.EV_KEY:
-                        # event.code: The key identity
-                        # event.value: 1 = press, 0 = release
-                        if event.code == ecodes.KEY_RIGHTALT and event.value == 1:
-                            if recording:
-                                print(f"\n{'='*40}\n⏹️  STOPPED RECORDING\n{'='*40}")
-                                stop_recording()
-                            else:
-                                if start_recording():
-                                    print('='*40)
+                        # Update state if the event matches our keys
+                        if event.code in key_states:
+                            # event.value: 1=down, 2=hold, 0=up
+                            # We treat 1 and 2 as "True" (down)
+                            key_states[event.code] = (event.value > 0)
+
+                            # Trigger only on a fresh press (value == 1) of either key
+                            # checking if BOTH are currently down.
+                            if event.value == 1 and key_states[ecodes.KEY_RIGHTCTRL] and key_states[ecodes.KEY_RIGHTALT]:
+                                if recording:
+                                    print(f"\n{'='*40}\n⏹️  STOPPED RECORDING\n{'='*40}")
+                                    stop_recording()
+                                else:
+                                    if start_recording():
+                                        print('='*40)
+
     except KeyboardInterrupt:
         print("\nExiting...")
     finally:
@@ -270,20 +285,22 @@ def run_with_evdev():
 def run_with_pynput():
     from pynput import keyboard
 
-    def on_press(key):
-        # pynput usually identifies Right Alt as keyboard.Key.alt_r
-        if key == keyboard.Key.alt_r:
-            if recording:
-                print(f"\n{'='*40}\n⏹️  STOPPED RECORDING\n{'='*40}")
-                stop_recording()
-            else:
-                if start_recording():
-                    print('='*40)
+    def toggle_recorder():
+        if recording:
+            print(f"\n{'='*40}\n⏹️  STOPPED RECORDING\n{'='*40}")
+            stop_recording()
+        else:
+            if start_recording():
+                print('='*40)
 
-    print("Listening for Right Alt...\n")
+    print("Listening for Right Ctrl+Alt...\n")
 
+    # GlobalHotKeys is the easiest way to handle combinations (chords)
+    # <ctrl_r> is Right Control, <alt_r> is Right Alt
     try:
-        with keyboard.Listener(on_press=on_press) as listener:
+        with keyboard.GlobalHotKeys({
+            '<ctrl_r>+<alt_r>': toggle_recorder
+        }) as listener:
             listener.join()
     except KeyboardInterrupt:
         print("\nExiting...")
