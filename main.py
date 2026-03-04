@@ -14,6 +14,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -29,6 +30,7 @@ WHISPER_MODEL = "whisper-1"
 WHISPER_LANGUAGE = "en"
 WHISPER_SAMPLE_RATE = 16000
 SERVER_TIMEOUT_SEC = 30
+KEYBOARD_SCAN_INTERVAL_SEC = 60.0
 
 # Auto-detect device sample rate
 try:
@@ -291,24 +293,6 @@ def run_with_evdev():
         print("❌ evdev not installed. Run: uv add evdev")
         sys.exit(1)
 
-    devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-    keyboards = []
-    for dev in devices:
-        caps = dev.capabilities()
-        if ecodes.EV_KEY not in caps:
-            continue
-        key_caps = caps.get(ecodes.EV_KEY, [])
-        if any(k in key_caps for k in [ecodes.KEY_A, ecodes.KEY_TAB, ecodes.KEY_SPACE]):
-            keyboards.append(dev)
-
-    if not keyboards:
-        print("❌ No keyboard found. Check permissions.")
-        sys.exit(1)
-
-    print(f"Found {len(keyboards)} keyboard device(s):")
-    for kbd in keyboards:
-        print(f"  - {kbd.name}")
-
     stream = sd.InputStream(
         samplerate=DEVICE_SAMPLE_RATE,
         channels=1,
@@ -321,9 +305,10 @@ def run_with_evdev():
 
     ctrl_keys = {ecodes.KEY_RIGHTCTRL}
     alt_keys = {ecodes.KEY_RIGHTALT}
-    ctrl_down = False
-    alt_down = False
-    combo_latched = False
+    if hasattr(ecodes, "KEY_ALTGR"):
+        alt_keys.add(ecodes.KEY_ALTGR)
+    if hasattr(ecodes, "KEY_ISO_LEVEL3_SHIFT"):
+        alt_keys.add(ecodes.KEY_ISO_LEVEL3_SHIFT)
 
     def toggle_recorder():
         if recording:
@@ -337,31 +322,98 @@ def run_with_evdev():
         from selectors import DefaultSelector, EVENT_READ
 
         selector = DefaultSelector()
-        for kbd in keyboards:
-            selector.register(kbd, EVENT_READ)
+        devices: dict[str, evdev.InputDevice] = {}
+        state: dict[str, dict[str, bool]] = {}
 
+        def is_keyboard_device(dev: evdev.InputDevice) -> bool:
+            try:
+                caps = dev.capabilities()
+            except OSError:
+                return False
+            if ecodes.EV_KEY not in caps:
+                return False
+            key_caps = set(caps.get(ecodes.EV_KEY, []))
+            required = {
+                ecodes.KEY_A,
+                ecodes.KEY_Z,
+                ecodes.KEY_SPACE,
+                ecodes.KEY_RIGHTCTRL,
+                ecodes.KEY_RIGHTALT,
+            }
+            return bool(key_caps.intersection(required))
+
+        def add_new_keyboards() -> None:
+            for path in evdev.list_devices():
+                if path in devices:
+                    continue
+                try:
+                    dev = evdev.InputDevice(path)
+                except OSError:
+                    continue
+                if not is_keyboard_device(dev):
+                    continue
+                try:
+                    selector.register(dev, EVENT_READ)
+                except Exception:
+                    dev.close()
+                    continue
+                devices[path] = dev
+                state[path] = {"ctrl": False, "alt": False, "latched": False}
+                print(f"  + Keyboard: {dev.name} ({path})")
+
+        def remove_keyboard(path: str) -> None:
+            dev = devices.pop(path, None)
+            state.pop(path, None)
+            if dev is None:
+                return
+            try:
+                selector.unregister(dev)
+            except Exception:
+                pass
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+        add_new_keyboards()
+        if not devices:
+            print("⚠️  No keyboard detected yet. Waiting for devices...")
+
+        last_scan = time.monotonic()
         while True:
-            for key, _ in selector.select():
+            now = time.monotonic()
+            if now - last_scan >= KEYBOARD_SCAN_INTERVAL_SEC:
+                add_new_keyboards()
+                last_scan = now
+            for key, _ in selector.select(timeout=1.0):
                 device = key.fileobj
-                for event in device.read():
+                path = getattr(device, "path", "")
+                if not path or path not in state:
+                    continue
+                try:
+                    events = device.read()
+                except OSError:
+                    print(f"  - Keyboard disconnected: {device.name} ({path})")
+                    remove_keyboard(path)
+                    continue
+                for event in events:
                     if event.type != ecodes.EV_KEY:
                         continue
 
                     is_key_down = event.value > 0
                     if event.code in ctrl_keys:
-                        ctrl_down = is_key_down
+                        state[path]["ctrl"] = is_key_down
                     elif event.code in alt_keys:
-                        alt_down = is_key_down
+                        state[path]["alt"] = is_key_down
                     else:
                         continue
 
-                    combo_down = ctrl_down and alt_down
-                    if combo_down and event.value == 1 and not combo_latched:
+                    combo_down = state[path]["ctrl"] and state[path]["alt"]
+                    if combo_down and event.value == 1 and not state[path]["latched"]:
                         toggle_recorder()
-                        combo_latched = True
+                        state[path]["latched"] = True
                     elif not combo_down:
-                        combo_latched = False
-
+                        state[path]["latched"] = False
     except KeyboardInterrupt:
         print("\nExiting...")
     finally:
