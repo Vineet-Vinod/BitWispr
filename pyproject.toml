@@ -1,14 +1,14 @@
 [project]
 name = "bitwispr"
 version = "0.1.0"
-description = "Voice-to-text using Whisper with real-time transcription"
+description = "Voice-to-text client with Trillim server (LLM + Whisper)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "faster-whisper",
     "sounddevice",
     "numpy",
     "pynput",
     "evdev",
     "scipy",
+    "trillim[voice]>=0.5.0",
 ]

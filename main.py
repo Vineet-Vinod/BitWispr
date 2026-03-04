@@ -1,31 +1,40 @@
 """
-BitWispr - Speech to Text using Whisper
-Press Right Ctrl+Alt to toggle recording on/off.
+BitWispr client - push-to-talk speech-to-text via local Trillim server.
+Press Right Ctrl+Right Alt to toggle recording on/off.
 
-For Wayland: Run with sudo or add user to input group:
+For Wayland: run with sudo or add user to input group:
     sudo usermod -aG input $USER
     (then log out and back in)
 """
 
+import io
+import json
 import os
+import queue
+import subprocess
 import sys
 import threading
-import subprocess
-import queue
+import urllib.error
+import urllib.request
+import uuid
+import wave
+
 import numpy as np
 import sounddevice as sd
 from scipy import signal
-from faster_whisper import WhisperModel
 
 # --- CONFIGURATION ---
-MODEL_SIZE = "tiny.en"  # Options: tiny.en, base.en, small.en, medium.en
-WHISPER_SAMPLE_RATE = 16000  # Whisper expects 16kHz
+SERVER_BASE_URL = os.environ.get("BITWISPR_SERVER_URL", "http://127.0.0.1:1111").rstrip("/")
+WHISPER_MODEL = "whisper-1"
+WHISPER_LANGUAGE = "en"
+WHISPER_SAMPLE_RATE = 16000
+SERVER_TIMEOUT_SEC = 30
 
 # Auto-detect device sample rate
 try:
-    DEVICE_SAMPLE_RATE = int(sd.query_devices(kind='input')['default_samplerate'])
+    DEVICE_SAMPLE_RATE = int(sd.query_devices(kind="input")["default_samplerate"])
 except Exception:
-    DEVICE_SAMPLE_RATE = 44100  # Fallback
+    DEVICE_SAMPLE_RATE = 44100
 
 # Detect display server (check multiple env vars for robustness with sudo)
 IS_WAYLAND = (
@@ -33,24 +42,12 @@ IS_WAYLAND = (
     or os.environ.get("WAYLAND_DISPLAY") is not None
 )
 
-print("=" * 55)
-print("BitWispr - Real-time Speech to Text")
-print("=" * 55)
-print(f"Display server: {'Wayland' if IS_WAYLAND else 'X11'}")
-print(f"Audio sample rate: {DEVICE_SAMPLE_RATE} Hz")
-print(f"Loading Whisper model '{MODEL_SIZE}'... please wait.")
-
-model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
-print("Model loaded successfully!")
-print("Hotkey: Right Ctrl+Alt (toggle recording on/off)")
-print("=" * 55 + "\n")
-
 # Global state
 recording = False
-transcribing = False  # Track if transcription is in progress
+transcribing = False
 audio_queue = queue.Queue()
 typed_text = ""
-transcribe_event = threading.Event()  # Signal to transcribe
+transcribe_event = threading.Event()
 worker_thread = None
 
 
@@ -58,11 +55,110 @@ def resample_audio(audio_data: np.ndarray, orig_sr: int, target_sr: int) -> np.n
     """Resample audio from original sample rate to target sample rate."""
     if orig_sr == target_sr:
         return audio_data
-    
-    # Calculate the number of samples in the resampled audio
+
     num_samples = int(len(audio_data) * target_sr / orig_sr)
     resampled = signal.resample(audio_data, num_samples)
     return resampled.astype(np.float32)
+
+
+def audio_to_wav_bytes(audio_data: np.ndarray, sample_rate: int) -> bytes:
+    """Convert float32 mono audio [-1, 1] into in-memory WAV bytes."""
+    clipped = np.clip(audio_data, -1.0, 1.0)
+    pcm16 = (clipped * 32767).astype(np.int16)
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm16.tobytes())
+    return buffer.getvalue()
+
+
+def post_multipart(
+    url: str,
+    fields: dict[str, str],
+    file_field: str,
+    filename: str,
+    file_bytes: bytes,
+    content_type: str,
+) -> dict:
+    """Send multipart/form-data request and parse JSON response."""
+    boundary = f"----bitwispr-{uuid.uuid4().hex}"
+    body = bytearray()
+
+    for key, value in fields.items():
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(
+            f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8")
+        )
+        body.extend(value.encode("utf-8"))
+        body.extend(b"\r\n")
+
+    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(
+        (
+            f'Content-Disposition: form-data; name="{file_field}"; '
+            f'filename="{filename}"\r\n'
+        ).encode("utf-8")
+    )
+    body.extend(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+    body.extend(file_bytes)
+    body.extend(b"\r\n")
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+    req = urllib.request.Request(
+        url,
+        data=bytes(body),
+        method="POST",
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=SERVER_TIMEOUT_SEC) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def get_json(url: str) -> dict:
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def check_server() -> None:
+    """Fail fast if BitWispr server is not reachable."""
+    try:
+        payload = get_json(f"{SERVER_BASE_URL}/v1/models")
+        loaded = payload.get("data", [])
+        model_name = loaded[0]["id"] if loaded else "(no model loaded)"
+        print(f"Connected to server: {SERVER_BASE_URL} | model: {model_name}")
+    except urllib.error.URLError as e:
+        print(f"❌ Cannot reach server at {SERVER_BASE_URL}: {e}")
+        print("Start it with: uv run server.py")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Server check failed: {e}")
+        sys.exit(1)
+
+
+def transcribe_with_server(audio_data_16k: np.ndarray) -> str:
+    """Send WAV audio to local Trillim endpoint and return text."""
+    audio_bytes = audio_to_wav_bytes(audio_data_16k, WHISPER_SAMPLE_RATE)
+    payload = post_multipart(
+        f"{SERVER_BASE_URL}/v1/audio/transcriptions",
+        fields={
+            "model": WHISPER_MODEL,
+            "language": WHISPER_LANGUAGE,
+            "response_format": "json",
+        },
+        file_field="file",
+        filename="recording.wav",
+        file_bytes=audio_bytes,
+        content_type="audio/wav",
+    )
+    return payload.get("text", "").strip()
+
 
 def type_text(text: str):
     """Type text at cursor position. Works on both X11 and Wayland."""
@@ -95,31 +191,29 @@ def type_text(text: str):
         print("⚠️  Could not type text. Install ydotool:")
         print("   sudo apt install ydotool")
         print(f"   Text was: {text}")
+        return
 
-    else:
-        try:
-            subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", "--", text],
-                check=True,
-                capture_output=True,
-                timeout=5,
-            )
-        except FileNotFoundError:
-            print("⚠️  xdotool not found. Install with: sudo apt install xdotool")
-            print(f"   Text was: {text}")
+    try:
+        subprocess.run(
+            ["xdotool", "type", "--clearmodifiers", "--", text],
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        print("⚠️  xdotool not found. Install with: sudo apt install xdotool")
+        print(f"   Text was: {text}")
+
 
 def transcription_worker():
     """Persistent worker thread that waits for transcription requests."""
     global typed_text, transcribing
 
     while True:
-        # Wait for signal to transcribe
         transcribe_event.wait()
         transcribe_event.clear()
-        
         transcribing = True
 
-        # Collect all audio from queue
         audio_buffer = []
         try:
             while True:
@@ -128,79 +222,65 @@ def transcription_worker():
         except queue.Empty:
             pass
 
-        if len(audio_buffer) > DEVICE_SAMPLE_RATE * 0.3:  # At least 0.3s of audio
+        if len(audio_buffer) > DEVICE_SAMPLE_RATE * 0.3:
             print("🔄 Transcribing...")
-            
             final_audio = np.array(audio_buffer, dtype=np.float32)
-            final_audio_16k = resample_audio(final_audio, DEVICE_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
-
+            final_audio_16k = resample_audio(
+                final_audio, DEVICE_SAMPLE_RATE, WHISPER_SAMPLE_RATE
+            )
             try:
-                segments, _ = model.transcribe(
-                    final_audio_16k,
-                    beam_size=5,
-                    vad_filter=True,
-                )
-
-                final_text = ""
-                for segment in segments:
-                    final_text += segment.text
-                final_text = final_text.strip()
-
+                final_text = transcribe_with_server(final_audio_16k)
                 if final_text:
                     print(f"✅ {final_text}")
                     type_text(final_text + " ")
                     typed_text = final_text
                 else:
                     print("No speech detected.")
-
             except Exception as e:
                 print(f"Transcription error: {e}")
         else:
             print("Recording too short.")
-        
+
         transcribing = False
+
 
 def audio_callback(indata, frames, time_info, status):
     """Callback for audio stream - adds audio to queue."""
-    # Ignore overflow warnings - they're common and don't affect quality much
     if recording:
         audio_queue.put(indata[:, 0].copy())
+
 
 def start_recording():
     """Start recording audio."""
     global recording, typed_text, worker_thread
 
-    # Don't start if transcription is in progress
     if transcribing:
         print("⏳ Please wait, transcription in progress...")
         return False
 
-    # Start worker thread once (on first recording)
     if worker_thread is None:
         worker_thread = threading.Thread(target=transcription_worker, daemon=True)
         worker_thread.start()
 
-    # Clear the audio queue
     while not audio_queue.empty():
         try:
             audio_queue.get_nowait()
         except queue.Empty:
             break
-    
+
     typed_text = ""
     recording = True
-
-    print("\n🎙️  Recording started... (Press Right Ctrl+Alt to stop)")
+    print("\n🎙️  Recording started... (Press Right Ctrl+Right Alt to stop)")
     return True
+
 
 def stop_recording():
     """Stop recording and trigger transcription."""
     global recording
     recording = False
     print("⏹️  Recording stopped.\n")
-    
-    # Signal the worker to transcribe
     transcribe_event.set()
+
 
 def run_with_evdev():
     """Use evdev for keyboard listening (works on Wayland with proper permissions)."""
@@ -211,18 +291,15 @@ def run_with_evdev():
         print("❌ evdev not installed. Run: uv add evdev")
         sys.exit(1)
 
-    # Find actual keyboard devices
     devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
     keyboards = []
-    for d in devices:
-        caps = d.capabilities()
+    for dev in devices:
+        caps = dev.capabilities()
         if ecodes.EV_KEY not in caps:
             continue
         key_caps = caps.get(ecodes.EV_KEY, [])
-        # Check for common keys to identify real keyboards
-        has_keyboard_keys = any(k in key_caps for k in [ecodes.KEY_A, ecodes.KEY_TAB, ecodes.KEY_LEFTSHIFT])
-        if has_keyboard_keys:
-            keyboards.append(d)
+        if any(k in key_caps for k in [ecodes.KEY_A, ecodes.KEY_TAB, ecodes.KEY_SPACE]):
+            keyboards.append(dev)
 
     if not keyboards:
         print("❌ No keyboard found. Check permissions.")
@@ -240,17 +317,25 @@ def run_with_evdev():
     )
     stream.start()
 
-    print("Listening for Right Ctrl+Alt...\n")
-    
-    # State tracking for the specific keys we care about
-    # 1 = pressed, 0 = released
-    key_states = {
-        ecodes.KEY_RIGHTCTRL: False,
-        ecodes.KEY_RIGHTALT: False
-    }
+    print("Listening for Right Ctrl+Right Alt...\n")
+
+    ctrl_keys = {ecodes.KEY_RIGHTCTRL}
+    alt_keys = {ecodes.KEY_RIGHTALT}
+    ctrl_down = False
+    alt_down = False
+    combo_latched = False
+
+    def toggle_recorder():
+        if recording:
+            print(f"\n{'=' * 40}\n⏹️  STOPPED RECORDING\n{'=' * 40}")
+            stop_recording()
+        else:
+            if start_recording():
+                print("=" * 40)
 
     try:
         from selectors import DefaultSelector, EVENT_READ
+
         selector = DefaultSelector()
         for kbd in keyboards:
             selector.register(kbd, EVENT_READ)
@@ -259,22 +344,23 @@ def run_with_evdev():
             for key, _ in selector.select():
                 device = key.fileobj
                 for event in device.read():
-                    if event.type == ecodes.EV_KEY:
-                        # Update state if the event matches our keys
-                        if event.code in key_states:
-                            # event.value: 1=down, 2=hold, 0=up
-                            # We treat 1 and 2 as "True" (down)
-                            key_states[event.code] = (event.value > 0)
+                    if event.type != ecodes.EV_KEY:
+                        continue
 
-                            # Trigger only on a fresh press (value == 1) of either key
-                            # checking if BOTH are currently down.
-                            if event.value == 1 and key_states[ecodes.KEY_RIGHTCTRL] and key_states[ecodes.KEY_RIGHTALT]:
-                                if recording:
-                                    print(f"\n{'='*40}\n⏹️  STOPPED RECORDING\n{'='*40}")
-                                    stop_recording()
-                                else:
-                                    if start_recording():
-                                        print('='*40)
+                    is_key_down = event.value > 0
+                    if event.code in ctrl_keys:
+                        ctrl_down = is_key_down
+                    elif event.code in alt_keys:
+                        alt_down = is_key_down
+                    else:
+                        continue
+
+                    combo_down = ctrl_down and alt_down
+                    if combo_down and event.value == 1 and not combo_latched:
+                        toggle_recorder()
+                        combo_latched = True
+                    elif not combo_down:
+                        combo_latched = False
 
     except KeyboardInterrupt:
         print("\nExiting...")
@@ -282,30 +368,65 @@ def run_with_evdev():
         stream.stop()
         stream.close()
 
+
 def run_with_pynput():
     from pynput import keyboard
 
+    state = {"ctrl_r": False, "alt_r": False, "combo_latched": False}
+    ctrl_keys = {keyboard.Key.ctrl_r}
+    alt_keys = {
+        keyboard.Key.alt_r,
+        keyboard.Key.alt_gr,
+    }
+
     def toggle_recorder():
         if recording:
-            print(f"\n{'='*40}\n⏹️  STOPPED RECORDING\n{'='*40}")
+            print(f"\n{'=' * 40}\n⏹️  STOPPED RECORDING\n{'=' * 40}")
             stop_recording()
         else:
             if start_recording():
-                print('='*40)
+                print("=" * 40)
 
-    print("Listening for Right Ctrl+Alt...\n")
+    def update_state(key, is_pressed: bool):
+        if key in ctrl_keys:
+            state["ctrl_r"] = is_pressed
+        elif key in alt_keys:
+            state["alt_r"] = is_pressed
+        else:
+            return
 
-    # GlobalHotKeys is the easiest way to handle combinations (chords)
-    # <ctrl_r> is Right Control, <alt_r> is Right Alt
+        combo_down = state["ctrl_r"] and state["alt_r"]
+        if combo_down and is_pressed and not state["combo_latched"]:
+            toggle_recorder()
+            state["combo_latched"] = True
+        elif not combo_down:
+            state["combo_latched"] = False
+
+    def on_press(key):
+        update_state(key, True)
+
+    def on_release(key):
+        update_state(key, False)
+
+    print("Listening for Right Ctrl+Right Alt...\n")
+
     try:
-        with keyboard.GlobalHotKeys({
-            '<ctrl_r>+<alt_r>': toggle_recorder
-        }) as listener:
+        with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
             listener.join()
     except KeyboardInterrupt:
         print("\nExiting...")
 
+
 def main():
+    print("=" * 55)
+    print("BitWispr - Real-time Speech to Text")
+    print("=" * 55)
+    print(f"Display server: {'Wayland' if IS_WAYLAND else 'X11'}")
+    print(f"Audio sample rate: {DEVICE_SAMPLE_RATE} Hz")
+    check_server()
+    print("Hotkey: Right Ctrl+Right Alt (toggle recording on/off)")
+    print("=" * 55 + "\n")
+
     if IS_WAYLAND:
         print("Using evdev for Wayland keyboard input...")
         print("(If this fails, run with sudo or add yourself to input group)\n")

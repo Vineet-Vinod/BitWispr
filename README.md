@@ -1,12 +1,17 @@
 # BitWispr
 
-Real-time voice-to-text using OpenAI's Whisper. Press **Shift+Tab** to toggle recording, and text is transcribed and typed at your cursor when you're done recording.
+BitWispr now uses a local Trillim server for both:
+- LLM (`BitNet-TRNQ` + `BitNet-GenZ-LoRA-TRNQ`)
+- Whisper speech-to-text (`/v1/audio/transcriptions`)
+
+The recorder client (`main.py`) captures audio and sends it to the local server on `http://127.0.0.1:1111`.
 
 ## Features
 
-- ⌨️ Types directly at cursor position
-- 🐧 Works on both X11 and Wayland
-- 🔒 Fully offline/local processing
+- Types transcribed text directly at your cursor
+- Works on X11 and Wayland
+- Uses local Trillim endpoints (no cloud dependency)
+- Hotkey is **right-only** `Right Ctrl + Right Alt`
 
 ## Setup
 
@@ -23,15 +28,13 @@ sudo apt install ydotool
 sudo apt install xdotool
 ```
 
-### 2. Add yourself to the input group (Wayland only)
-
-This allows reading keyboard events without sudo:
+### 2. Add yourself to input group (Wayland only)
 
 ```bash
 sudo usermod -aG input $USER
 ```
 
-Then **log out and back in** for the group change to take effect.
+Log out and back in after changing groups.
 
 ### 3. Install Python dependencies
 
@@ -39,39 +42,74 @@ Then **log out and back in** for the group change to take effect.
 uv sync
 ```
 
-## Usage
+## Autostart (always running)
+
+Install user services so server + client start at login and auto-restart:
+
+```bash
+./scripts/install_autostart.sh
+```
+
+Check status:
+
+```bash
+systemctl --user status bitwispr-server.service bitwispr-client.service
+```
+
+Stop/remove autostart:
+
+```bash
+./scripts/uninstall_autostart.sh
+```
+
+## Run manually
+
+### Start always-on Trillim server (localhost:1111)
+
+```bash
+uv run server.py
+```
+
+`server.py` runs with:
+- model: `Trillim/BitNet-TRNQ`
+- adapter: `Trillim/BitNet-GenZ-LoRA-TRNQ`
+- components: `LLM + Whisper`
+- host/port: `127.0.0.1:1111`
+
+The script auto-restarts the server if it exits unexpectedly.
+
+### Start recorder client
 
 ```bash
 uv run main.py
 ```
 
-- Press **Shift+Tab** to start recording
-- Speak naturally (slower side is better)
-- Press **Shift+Tab** again to stop
-- Text is typed at your cursor in real-time as you speak
+- Press `Right Ctrl + Right Alt` to start recording
+- Press `Right Ctrl + Right Alt` again to stop and transcribe
+- Text is typed at the active cursor position
 
-## Configuration
+## Endpoint client script
 
-Edit `main.py` to change:
+Use the helper script to hit server endpoints directly:
 
-- `MODEL_SIZE`: `"tiny.en"` (fastest), `"base.en"`, `"small.en"`, `"medium.en"` (most accurate)
-- For GPU acceleration, change `device="cpu"` to `device="cuda"`
-
-## Troubleshooting
-
-### "No keyboard found" error
-Run with sudo or ensure you're in the `input` group:
 ```bash
-groups  # Should show 'input'
+uv run api_client.py --chat "Summarize this repo in one sentence."
 ```
 
-### Text not typing on Wayland
-Make sure `ydotool` is installed:
+Optional audio transcription test:
+
 ```bash
-sudo apt install ydotool
+uv run api_client.py --audio /path/to/sample.wav
 ```
 
-### Permission denied errors
+## Trillim docs in downloaded package
+
+Trillim bundles docs as `.md` files inside the installed package:
+
 ```bash
-sudo uv run main.py  # Temporary workaround
+find .venv/lib/python3.12/site-packages/trillim/docs -maxdepth 1 -type f -name "*.md" | sort
 ```
+
+Important references:
+- `.venv/lib/python3.12/site-packages/trillim/docs/server.md`
+- `.venv/lib/python3.12/site-packages/trillim/docs/cli.md`
