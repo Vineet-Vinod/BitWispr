@@ -7,10 +7,6 @@ SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
 mkdir -p "${SYSTEMD_USER_DIR}"
 
-# Clean up legacy unit if present.
-systemctl --user disable --now bitwisp.service || true
-rm -f "${SYSTEMD_USER_DIR}/bitwisp.service"
-
 cat > "${SYSTEMD_USER_DIR}/bitwispr-server.service" <<EOF
 [Unit]
 Description=BitWispr Trillim Server
@@ -48,7 +44,6 @@ WantedBy=default.target
 EOF
 
 systemctl --user daemon-reload
-systemctl --user reset-failed bitwisp.service || true
 systemctl --user enable --now bitwispr-server.service
 systemctl --user enable --now bitwispr-client.service
 
