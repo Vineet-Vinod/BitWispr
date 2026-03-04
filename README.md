@@ -42,6 +42,17 @@ Log out and back in after changing groups.
 uv sync
 ```
 
+### 4. Configure Discord auto-responder (optional)
+
+Edit `.env`:
+
+```bash
+DISCORD_AUTH_TOKEN=Bot <your_token_or_auth_header>
+DISCORD_CHANNEL_IDS=123456789012345678,234567890123456789
+```
+
+`DISCORD_CHANNEL_IDS` is a comma-separated list of Discord channel IDs.
+
 ## Autostart (always running)
 
 Install user services so server + client start at login and auto-restart:
@@ -75,6 +86,7 @@ uv run server.py
 - adapter: `Trillim/BitNet-GenZ-LoRA-TRNQ`
 - components: `LLM + Whisper`
 - host/port: `127.0.0.1:1111`
+- optional Discord poller that auto-replies to non-self messages in configured channels
 
 The script auto-restarts the server if it exits unexpectedly.
 
