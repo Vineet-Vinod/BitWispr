@@ -187,6 +187,7 @@ class DiscordAutoResponder:
             payload = json.loads(raw)
             message = payload.get("message")
             code = payload.get("code")
+            detail_field = payload.get("detail")
             if payload.get("retry_after") is not None:
                 try:
                     retry_after = float(payload["retry_after"])
@@ -196,6 +197,8 @@ class DiscordAutoResponder:
                 return f"{error} | code={code} message={message}", retry_after
             if message is not None:
                 return f"{error} | message={message}", retry_after
+            if isinstance(detail_field, str):
+                return f"{error} | detail={detail_field}", retry_after
             return f"{error} | body={raw}", retry_after
         except Exception:
             return f"{error} | body={raw}", retry_after
@@ -217,6 +220,60 @@ class DiscordAutoResponder:
 
         text = obj.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         return text[:1800]
+
+    @staticmethod
+    def _is_context_overflow_detail(detail: str) -> bool:
+        detail_lower = detail.lower()
+        return "exceeds context window" in detail_lower or "prompt length" in detail_lower
+
+    def _llm_reply_with_context_fallback(
+        self, state: ChannelPollState, user_message: dict
+    ) -> tuple[str, bool]:
+        history = list(state.conversation)
+        trimmed_messages = 0
+        did_aggressive_trim = False
+
+        while True:
+            prompt_messages = [*history, user_message]
+            try:
+                reply = self._llm_reply(prompt_messages)
+                if trimmed_messages > 0:
+                    state.conversation = history
+                    print(
+                        f"Trimmed {trimmed_messages} history messages in channel "
+                        f"{state.channel_id} to fit context window"
+                    )
+                return reply, True
+            except urllib.error.HTTPError as e:
+                detail, _ = self._http_error_details(e)
+                if e.code == 400 and self._is_context_overflow_detail(detail):
+                    if not history:
+                        print(
+                            f"Context overflow on channel {state.channel_id}; "
+                            "latest message is too large to fit."
+                        )
+                        return "", False
+
+                    if not did_aggressive_trim:
+                        # First fallback: cut out 90% of old context and keep newest 10%.
+                        keep_count = max(1, int(len(history) * 0.1))
+                        if keep_count >= len(history):
+                            keep_count = len(history) - 1
+                        if keep_count > 0:
+                            removed = len(history) - keep_count
+                            history = history[-keep_count:]
+                        else:
+                            removed = len(history)
+                            history = []
+                        trimmed_messages += removed
+                        did_aggressive_trim = True
+                        continue
+
+                    # Doc-aligned second fallback: reset to just the latest message.
+                    trimmed_messages += len(history)
+                    history = []
+                    continue
+                raise
 
     def _bootstrap_self_user(self) -> bool:
         try:
@@ -337,9 +394,12 @@ class DiscordAutoResponder:
                     continue
 
                 user_message = {"role": "user", "content": content}
-                prompt_messages = [*state.conversation, user_message]
                 try:
-                    reply = self._llm_reply(prompt_messages)
+                    reply, should_track_user = self._llm_reply_with_context_fallback(
+                        state, user_message
+                    )
+                    if not should_track_user:
+                        continue
                     state.conversation.append(user_message)
                     if not reply:
                         continue

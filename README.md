@@ -59,6 +59,8 @@ DISCORD_BACKOFF_MAX_SEC=900
 Polling is channel-specific: each channel backs off independently, and any channel with
 a successful reply enters a fast mode (`DISCORD_FAST_POLL_SEC`) for
 `DISCORD_FAST_WINDOW_SEC` seconds. Each additional successful reply resets that fast window.
+If a channel conversation grows beyond model context, the responder trims oldest channel turns
+and retries automatically. If it still overflows, it resets to just the latest incoming message.
 
 ## Autostart (always running)
 
