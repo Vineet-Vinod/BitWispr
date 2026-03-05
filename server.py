@@ -3,13 +3,16 @@ BitWispr Trillim server.
 Runs LLM + Whisper on localhost:1111 with BitNet-TRNQ + GenZ adapter.
 """
 
+import heapq
 import json
 import os
+import random
 import signal
 import threading
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from trillim import LLM, Server, Whisper
@@ -53,6 +56,18 @@ DISCORD_CHANNEL_IDS = [
 DISCORD_POLL_INTERVAL_SEC = max(
     3.0, float(os.environ.get("DISCORD_POLL_INTERVAL_SEC", "900"))
 )
+DISCORD_FAST_POLL_SEC = max(1.0, float(os.environ.get("DISCORD_FAST_POLL_SEC", "5")))
+DISCORD_FAST_WINDOW_SEC = max(
+    DISCORD_FAST_POLL_SEC, float(os.environ.get("DISCORD_FAST_WINDOW_SEC", "60"))
+)
+DISCORD_BACKOFF_FACTOR = max(1.1, float(os.environ.get("DISCORD_BACKOFF_FACTOR", "2")))
+DISCORD_BACKOFF_MAX_SEC = max(
+    DISCORD_FAST_POLL_SEC,
+    float(os.environ.get("DISCORD_BACKOFF_MAX_SEC", str(DISCORD_POLL_INTERVAL_SEC))),
+)
+DISCORD_POLL_JITTER_PCT = min(
+    0.5, max(0.0, float(os.environ.get("DISCORD_POLL_JITTER_PCT", "0.1")))
+)
 
 _stop_requested = False
 
@@ -60,6 +75,24 @@ _stop_requested = False
 def _handle_stop_signal(signum, frame):
     global _stop_requested
     _stop_requested = True
+
+
+@dataclass
+class ChannelPollState:
+    channel_id: str
+    last_seen_id: str | None = None
+    conversation: list[dict] = field(default_factory=list)
+    next_poll_at: float = 0.0
+    interval_sec: float = DISCORD_FAST_POLL_SEC
+    fast_until: float = 0.0
+    consecutive_idle_polls: int = 0
+
+
+@dataclass
+class PollOutcome:
+    replied: bool = False
+    rate_limited: bool = False
+    retry_after_sec: float | None = None
 
 
 class DiscordAutoResponder:
@@ -71,13 +104,21 @@ class DiscordAutoResponder:
         channel_ids: list[str],
         llm_base_url: str,
         poll_interval_sec: float = 900.0,
+        fast_poll_sec: float = 5.0,
+        fast_window_sec: float = 300.0,
+        backoff_factor: float = 2.0,
+        poll_jitter_pct: float = 0.1,
     ):
         self.auth_token = auth_token
         self.channel_ids = channel_ids
         self.llm_base_url = llm_base_url.rstrip("/")
-        self.poll_interval_sec = poll_interval_sec
+        self.poll_interval_sec = max(3.0, poll_interval_sec)
+        self.fast_poll_sec = max(1.0, fast_poll_sec)
+        self.fast_window_sec = max(self.fast_poll_sec, fast_window_sec)
+        self.backoff_factor = max(1.1, backoff_factor)
+        self.poll_jitter_pct = min(0.5, max(0.0, poll_jitter_pct))
         self.self_user_id: str | None = None
-        self.last_seen_ids: dict[str, str] = {}
+        self.channel_states: dict[str, ChannelPollState] = {}
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
 
@@ -92,7 +133,9 @@ class DiscordAutoResponder:
         self.thread.start()
         print(
             "Discord auto-responder enabled "
-            f"(channels: {', '.join(self.channel_ids)}, poll={self.poll_interval_sec:.1f}s)"
+            "(channels: "
+            f"{', '.join(self.channel_ids)}, fast={self.fast_poll_sec:.1f}s, "
+            f"window={self.fast_window_sec:.0f}s, max_backoff={self.poll_interval_sec:.1f}s)"
         )
 
     def stop(self) -> None:
@@ -126,33 +169,41 @@ class DiscordAutoResponder:
             return json.loads(resp.read().decode("utf-8"))
 
     @staticmethod
-    def _http_error_details(error: urllib.error.HTTPError) -> str:
+    def _http_error_details(error: urllib.error.HTTPError) -> tuple[str, float | None]:
+        retry_after: float | None = None
+        header_retry_after = error.headers.get("Retry-After")
+        if header_retry_after:
+            try:
+                retry_after = float(header_retry_after)
+            except ValueError:
+                retry_after = None
+
         try:
             raw = error.read().decode("utf-8")
         except Exception:
-            return str(error)
+            return str(error), retry_after
 
         try:
             payload = json.loads(raw)
             message = payload.get("message")
             code = payload.get("code")
+            if payload.get("retry_after") is not None:
+                try:
+                    retry_after = float(payload["retry_after"])
+                except (TypeError, ValueError):
+                    pass
             if message is not None and code is not None:
-                return f"{error} | code={code} message={message}"
+                return f"{error} | code={code} message={message}", retry_after
             if message is not None:
-                return f"{error} | message={message}"
-            return f"{error} | body={raw}"
+                return f"{error} | message={message}", retry_after
+            return f"{error} | body={raw}", retry_after
         except Exception:
-            return f"{error} | body={raw}"
+            return f"{error} | body={raw}", retry_after
 
-    def _llm_reply(self, message_text: str, channel_id: str) -> str:
+    def _llm_reply(self, messages: list[dict]) -> str:
         payload = {
             "model": "BitNet-TRNQ",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (message_text),
-                },
-            ],
+            "messages": messages,
         }
 
         req = urllib.request.Request(
@@ -164,12 +215,7 @@ class DiscordAutoResponder:
         with urllib.request.urlopen(req, timeout=60) as resp:
             obj = json.loads(resp.read().decode("utf-8"))
 
-        text = (
-            obj.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-            .strip()
-        )
+        text = obj.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         return text[:1800]
 
     def _bootstrap_self_user(self) -> bool:
@@ -185,41 +231,102 @@ class DiscordAutoResponder:
         return False
 
     def _run(self) -> None:
+        # Authenticate first; skip polling if token is not valid yet.
         while not self.stop_event.is_set():
             if not self.self_user_id:
                 self._bootstrap_self_user()
-                self.stop_event.wait(5.0) # Wait 5 seconds
+                self.stop_event.wait(5.0)
+                continue
+            break
+
+        if self.stop_event.is_set():
+            return
+
+        now = time.monotonic()
+        schedule: list[tuple[float, str]] = []
+        self.channel_states = {}
+        for idx, channel_id in enumerate(self.channel_ids):
+            state = ChannelPollState(
+                channel_id=channel_id,
+                next_poll_at=now + (idx * 0.4),  # Stagger startup reads.
+                interval_sec=self.fast_poll_sec,
+            )
+            self.channel_states[channel_id] = state
+            heapq.heappush(schedule, (state.next_poll_at, channel_id))
+
+        while not self.stop_event.is_set() and schedule:
+            due_at, channel_id = heapq.heappop(schedule)
+            state = self.channel_states[channel_id]
+            if abs(due_at - state.next_poll_at) > 0.0001:
                 continue
 
-            for channel_id in self.channel_ids:
-                if self.stop_event.is_set():
-                    break
-                self._process_channel(channel_id)
+            wait_sec = max(0.0, due_at - time.monotonic())
+            if self.stop_event.wait(wait_sec):
+                break
 
-            self.stop_event.wait(self.poll_interval_sec)
+            outcome = self._process_channel(state)
+            now = time.monotonic()
+            self._schedule_next_poll(state, outcome, now)
+            heapq.heappush(schedule, (state.next_poll_at, channel_id))
 
-    def _process_channel(self, channel_id: str) -> None:
+    def _jitter_delay(self, delay_sec: float) -> float:
+        if self.poll_jitter_pct <= 0 or delay_sec <= self.fast_poll_sec:
+            return delay_sec
+        span = delay_sec * self.poll_jitter_pct
+        return max(self.fast_poll_sec, delay_sec + random.uniform(-span, span))
+
+    def _schedule_next_poll(
+        self, state: ChannelPollState, outcome: PollOutcome, now: float
+    ) -> None:
+        if outcome.rate_limited:
+            retry_after = outcome.retry_after_sec or self.fast_poll_sec
+            state.next_poll_at = now + max(self.fast_poll_sec, retry_after)
+            return
+
+        if outcome.replied:
+            # Reset fast window every time we successfully reply.
+            state.fast_until = now + self.fast_window_sec
+            state.interval_sec = self.fast_poll_sec
+            state.consecutive_idle_polls = 0
+            state.next_poll_at = now + self.fast_poll_sec
+            return
+
+        if now < state.fast_until:
+            state.next_poll_at = now + self.fast_poll_sec
+            return
+
+        state.consecutive_idle_polls += 1
+        state.interval_sec = min(
+            self.poll_interval_sec,
+            max(self.fast_poll_sec, state.interval_sec * self.backoff_factor),
+        )
+        state.next_poll_at = now + self._jitter_delay(state.interval_sec)
+
+    def _process_channel(self, state: ChannelPollState) -> PollOutcome:
+        channel_id = state.channel_id
+        outcome = PollOutcome()
         try:
             messages = self._discord_request(
                 "GET", f"/channels/{channel_id}/messages?limit=5"
             )
             if not isinstance(messages, list) or not messages:
-                return
+                return outcome
 
             # Process oldest -> newest.
             messages.sort(key=lambda item: int(item.get("id", "0")))
 
-            current_last_seen = self.last_seen_ids.get(channel_id)
+            current_last_seen = state.last_seen_id
             if current_last_seen is None:
-                self.last_seen_ids[channel_id] = messages[-1]["id"]
-                return
+                state.last_seen_id = messages[-1]["id"]
+                return outcome
 
             for msg in messages:
                 msg_id = str(msg.get("id", "0"))
                 if int(msg_id) <= int(current_last_seen):
                     continue
 
-                self.last_seen_ids[channel_id] = msg_id
+                state.last_seen_id = msg_id
+                current_last_seen = msg_id
                 author = msg.get("author", {}) or {}
                 author_id = str(author.get("id", ""))
                 if author_id == self.self_user_id or author.get("bot"):
@@ -229,8 +336,11 @@ class DiscordAutoResponder:
                 if not content:
                     continue
 
+                user_message = {"role": "user", "content": content}
+                prompt_messages = [*state.conversation, user_message]
                 try:
-                    reply = self._llm_reply(content, channel_id)
+                    reply = self._llm_reply(prompt_messages)
+                    state.conversation.append(user_message)
                     if not reply:
                         continue
                     self._discord_request(
@@ -238,24 +348,30 @@ class DiscordAutoResponder:
                         f"/channels/{channel_id}/messages",
                         payload={"content": reply},
                     )
+                    state.conversation.append({"role": "assistant", "content": reply})
+                    outcome.replied = True
                 except urllib.error.HTTPError as e:
-                    detail = self._http_error_details(e)
+                    detail, retry_after = self._http_error_details(e)
                     print(f"Discord reply failed for channel {channel_id}: {detail}")
+                    if e.code == 429:
+                        outcome.rate_limited = True
+                        outcome.retry_after_sec = retry_after
+                        break
                 except Exception as e:
                     print(f"LLM/Discord handling error for channel {channel_id}: {e}")
 
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                retry_after = DISCORD_POLL_INTERVAL_SEC
-                detail = self._http_error_details(e)
+                detail, retry_after = self._http_error_details(e)
                 print(f"Discord rate limited on channel {channel_id}: {detail}")
-                print(f"Sleeping {retry_after:.2f}s")
-                self.stop_event.wait(retry_after)
+                outcome.rate_limited = True
+                outcome.retry_after_sec = retry_after
             else:
-                detail = self._http_error_details(e)
+                detail, _ = self._http_error_details(e)
                 print(f"Discord polling HTTP error on channel {channel_id}: {detail}")
         except Exception as e:
             print(f"Discord polling error on channel {channel_id}: {e}")
+        return outcome
 
 
 def build_server() -> tuple[Server, str, str]:
@@ -278,7 +394,11 @@ def run_forever():
         auth_token=DISCORD_AUTH_TOKEN,
         channel_ids=DISCORD_CHANNEL_IDS,
         llm_base_url=llm_base_url,
-        poll_interval_sec=DISCORD_POLL_INTERVAL_SEC,
+        poll_interval_sec=DISCORD_BACKOFF_MAX_SEC,
+        fast_poll_sec=DISCORD_FAST_POLL_SEC,
+        fast_window_sec=DISCORD_FAST_WINDOW_SEC,
+        backoff_factor=DISCORD_BACKOFF_FACTOR,
+        poll_jitter_pct=DISCORD_POLL_JITTER_PCT,
     )
 
     print("=" * 55)

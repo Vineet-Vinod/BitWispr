@@ -49,9 +49,16 @@ Edit `.env`:
 ```bash
 DISCORD_AUTH_TOKEN=Bot <your_token_or_auth_header>
 DISCORD_CHANNEL_IDS=123456789012345678,234567890123456789
+DISCORD_FAST_POLL_SEC=5
+DISCORD_FAST_WINDOW_SEC=300
+DISCORD_BACKOFF_FACTOR=2
+DISCORD_BACKOFF_MAX_SEC=900
 ```
 
 `DISCORD_CHANNEL_IDS` is a comma-separated list of Discord channel IDs.
+Polling is channel-specific: each channel backs off independently, and any channel with
+a successful reply enters a fast mode (`DISCORD_FAST_POLL_SEC`) for
+`DISCORD_FAST_WINDOW_SEC` seconds. Each additional successful reply resets that fast window.
 
 ## Autostart (always running)
 
