@@ -1,17 +1,18 @@
 # BitWispr
 
-BitWispr now uses a local Trillim server for both:
+BitWispr is a single-process local app that shares one Trillim runtime for:
 - LLM (`BitNet-TRNQ` + `BitNet-GenZ-LoRA-TRNQ`)
-- Whisper speech-to-text (`/v1/audio/transcriptions`)
+- Whisper speech-to-text
 
-The recorder client (`main.py`) captures audio and sends it to the local server on `http://127.0.0.1:1111`.
+There is no local HTTP server/client split anymore. `main.py` instantiates `LLM` and `Whisper` directly and uses them in-process.
 
 ## Features
 
 - Types transcribed text directly at your cursor
 - Works on X11 and Wayland
-- Uses local Trillim endpoints (no cloud dependency)
+- Uses local Trillim components (no cloud dependency)
 - Hotkey is **right-only** `Right Ctrl + Right Alt`
+- Optional Discord auto-responder using the same in-process LLM runtime
 
 ## Setup
 
@@ -57,14 +58,13 @@ DISCORD_BACKOFF_MAX_SEC=900
 
 `DISCORD_CHANNEL_IDS` is a comma-separated list of Discord channel IDs.
 Polling is channel-specific: each channel backs off independently, and any channel with
-a successful reply enters a fast mode (`DISCORD_FAST_POLL_SEC`) for
-`DISCORD_FAST_WINDOW_SEC` seconds. Each additional successful reply resets that fast window.
-If a channel conversation grows beyond model context, the responder trims oldest channel turns
-and retries automatically. If it still overflows, it resets to just the latest incoming message.
+successful replies enters fast mode (`DISCORD_FAST_POLL_SEC`) for
+`DISCORD_FAST_WINDOW_SEC` seconds. If channel context overflows, old turns are trimmed
+and retried automatically.
 
 ## Autostart (always running)
 
-Install user services so server + client start at login and auto-restart:
+Install a user service so BitWispr starts at login and auto-restarts:
 
 ```bash
 ./scripts/install_autostart.sh
@@ -73,7 +73,7 @@ Install user services so server + client start at login and auto-restart:
 Check status:
 
 ```bash
-systemctl --user status bitwispr-server.service bitwispr-client.service
+systemctl --user status bitwispr.service
 ```
 
 Stop/remove autostart:
@@ -84,23 +84,6 @@ Stop/remove autostart:
 
 ## Run manually
 
-### Start always-on Trillim server (localhost:1111)
-
-```bash
-uv run server.py
-```
-
-`server.py` runs with:
-- model: `Trillim/BitNet-TRNQ`
-- adapter: `Trillim/BitNet-GenZ-LoRA-TRNQ`
-- components: `LLM + Whisper`
-- host/port: `127.0.0.1:1111`
-- optional Discord poller that auto-replies to non-self messages in configured channels
-
-The script auto-restarts the server if it exits unexpectedly.
-
-### Start recorder client
-
 ```bash
 uv run main.py
 ```
@@ -108,20 +91,6 @@ uv run main.py
 - Press `Right Ctrl + Right Alt` to start recording
 - Press `Right Ctrl + Right Alt` again to stop and transcribe
 - Text is typed at the active cursor position
-
-## Endpoint client script
-
-Use the helper script to hit server endpoints directly:
-
-```bash
-uv run api_client.py --chat "Summarize this repo in one sentence."
-```
-
-Optional audio transcription test:
-
-```bash
-uv run api_client.py --audio /path/to/sample.wav
-```
 
 ## Trillim docs in downloaded package
 

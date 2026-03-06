@@ -1,7 +1,7 @@
 [project]
 name = "bitwispr"
 version = "0.1.0"
-description = "Voice-to-text client with Trillim server (LLM + Whisper)"
+description = "Voice-to-text app with in-process Trillim runtime (LLM + Whisper)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
