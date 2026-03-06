@@ -70,8 +70,7 @@ Supported config message formats:
 - `set: <id1>, <id2>` or `channels: <id1> <id2>` to define the full active set.
 - `enable: <id1>, <id2>` and/or `disable: <id3>` (can be on separate lines).
 - Plain list like `123..., 456...` (treated like `set`).
-An empty config message (or no non-bot text in config channel) resets to
-`DISCORD_CHANNEL_IDS` from `.env`.
+- `START` or `STOP` to globally enable/disable auto-replies at runtime.
 Polling is channel-specific: each channel backs off independently, and any channel with
 successful replies enters fast mode (`DISCORD_FAST_POLL_SEC`) for
 `DISCORD_FAST_WINDOW_SEC` seconds. If channel context overflows, old turns are trimmed

@@ -344,6 +344,7 @@ class DiscordAutoResponder:
         self.thread: threading.Thread | None = None
         self.channel_config_text: str = ""
         self.channel_config_message_id: str | None = None
+        self.runtime_responder_active = True
 
     @property
     def enabled(self) -> bool:
@@ -443,18 +444,36 @@ class DiscordAutoResponder:
     def _extract_channel_ids(text: str) -> list[str]:
         return re.findall(r"\b\d{15,25}\b", text)
 
+    @staticmethod
+    def _parse_responder_command(text: str) -> bool | None:
+        command: bool | None = None
+        for line in text.splitlines():
+            line_stripped = line.strip().lower()
+            if not line_stripped:
+                continue
+            token = re.sub(r"[^a-z]", "", line_stripped)
+            if token == "start":
+                command = True
+            elif token == "stop":
+                command = False
+        return command
+
     def _parse_active_channels(self, text: str) -> set[str] | None:
         raw = text.strip()
         if not raw:
-            return set(self.default_channel_ids)
+            return None
 
         active = set(self.active_channel_id_set)
         saw_directive = False
+        content_lines: list[str] = []
         for line in raw.splitlines():
             line_stripped = line.strip()
             if not line_stripped:
                 continue
             lower = line_stripped.lower()
+            if lower in {"start", "stop"}:
+                continue
+            content_lines.append(line_stripped)
             ids = set(self._extract_channel_ids(line_stripped))
             if lower.startswith(("set", "only", "channels")):
                 active = set(ids)
@@ -469,10 +488,14 @@ class DiscordAutoResponder:
         if saw_directive:
             return active
 
-        ids = set(self._extract_channel_ids(raw))
+        if not content_lines:
+            return None
+
+        content = "\n".join(content_lines)
+        ids = set(self._extract_channel_ids(content))
         if not ids:
             return None
-        cleaned = re.sub(r"\b\d{15,25}\b", "", raw)
+        cleaned = re.sub(r"\b\d{15,25}\b", "", content)
         cleaned = re.sub(r"[\s,;|]+", "", cleaned)
         if cleaned:
             return None
@@ -548,13 +571,24 @@ class DiscordAutoResponder:
 
             self.channel_config_message_id = latest_message_id
             self.channel_config_text = latest_rules_text
+            responder_command = self._parse_responder_command(latest_rules_text)
+            if responder_command is not None:
+                self.runtime_responder_active = responder_command
+                responder_status = "STARTED" if responder_command else "STOPPED"
+                print(
+                    "Discord responder "
+                    f"{responder_status} from config channel {self.config_channel_id} "
+                    f"(message {self.channel_config_message_id})"
+                )
+
             parsed_channels = self._parse_active_channels(latest_rules_text)
             if parsed_channels is None:
-                print(
-                    "Discord config ignored from channel "
-                    f"{self.config_channel_id}; unsupported format in "
-                    f"message {self.channel_config_message_id}"
-                )
+                if responder_command is None and latest_rules_text:
+                    print(
+                        "Discord config ignored from channel "
+                        f"{self.config_channel_id}; unsupported format in "
+                        f"message {self.channel_config_message_id}"
+                    )
                 return
 
             source = (
@@ -664,11 +698,17 @@ class DiscordAutoResponder:
             if self.stop_event.wait(wait_sec):
                 break
 
-            # Always refresh rules first before processing any channel poll wake.
+            # Config refresh always happens first on each channel wake.
             self._refresh_dynamic_rules()
-            self._ensure_active_channels_scheduled(schedule, time.monotonic())
+            now = time.monotonic()
+            self._ensure_active_channels_scheduled(schedule, now)
             if channel_id not in self.active_channel_id_set:
                 continue
+            if not self.runtime_responder_active:
+                state.next_poll_at = now + self.fast_poll_sec
+                heapq.heappush(schedule, (state.next_poll_at, channel_id))
+                continue
+
             outcome = self._process_channel(state)
             now = time.monotonic()
             self._schedule_next_poll(state, outcome, now)
