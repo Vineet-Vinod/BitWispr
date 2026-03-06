@@ -49,14 +49,29 @@ Edit `.env`:
 
 ```bash
 DISCORD_AUTH_TOKEN=Bot <your_token_or_auth_header>
+DISCORD_RESPONDER_ENABLED=true
 DISCORD_CHANNEL_IDS=123456789012345678,234567890123456789
+DISCORD_CONFIGURATION_CHANNEL_ID=345678901234567890
 DISCORD_FAST_POLL_SEC=5
 DISCORD_FAST_WINDOW_SEC=300
 DISCORD_BACKOFF_FACTOR=2
 DISCORD_BACKOFF_MAX_SEC=900
 ```
 
+`DISCORD_RESPONDER_ENABLED=false` disables the Discord responder entirely
+without changing any channel settings.
 `DISCORD_CHANNEL_IDS` is a comma-separated list of Discord channel IDs.
+`DISCORD_CONFIGURATION_CHANNEL_ID` points to a rules channel; on every poll wake,
+BitWispr checks this channel first and uses the latest non-bot text message as
+live channel routing config. (`DISCORD_CONFIG_CHANNEL_ID` is accepted as an alias.)
+If this channel is also listed in `DISCORD_CHANNEL_IDS`, it is treated as rules-only
+and not auto-replied to.
+Supported config message formats:
+- `set: <id1>, <id2>` or `channels: <id1> <id2>` to define the full active set.
+- `enable: <id1>, <id2>` and/or `disable: <id3>` (can be on separate lines).
+- Plain list like `123..., 456...` (treated like `set`).
+An empty config message (or no non-bot text in config channel) resets to
+`DISCORD_CHANNEL_IDS` from `.env`.
 Polling is channel-specific: each channel backs off independently, and any channel with
 successful replies enters fast mode (`DISCORD_FAST_POLL_SEC`) for
 `DISCORD_FAST_WINDOW_SEC` seconds. If channel context overflows, old turns are trimmed

@@ -18,6 +18,7 @@ import json
 import os
 import queue
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -72,6 +73,10 @@ DISCORD_CHANNEL_IDS = [
     for channel_id in [chunk]
     if channel_id.strip()
 ]
+DISCORD_CONFIG_CHANNEL_ID = (
+    os.environ.get("DISCORD_CONFIGURATION_CHANNEL_ID")
+    or os.environ.get("DISCORD_CONFIG_CHANNEL_ID", "")
+).strip()
 DISCORD_POLL_INTERVAL_SEC = max(
     3.0, float(os.environ.get("DISCORD_POLL_INTERVAL_SEC", "900"))
 )
@@ -87,6 +92,21 @@ DISCORD_BACKOFF_MAX_SEC = max(
 DISCORD_POLL_JITTER_PCT = min(
     0.5, max(0.0, float(os.environ.get("DISCORD_POLL_JITTER_PCT", "0.1")))
 )
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+DISCORD_RESPONDER_ENABLED = _env_bool("DISCORD_RESPONDER_ENABLED", True)
 
 # Auto-detect device sample rate
 try:
@@ -293,6 +313,8 @@ class DiscordAutoResponder:
         auth_token: str,
         channel_ids: list[str],
         llm_reply_fn,
+        config_channel_id: str | None = None,
+        responder_enabled: bool = True,
         poll_interval_sec: float = 900.0,
         fast_poll_sec: float = 5.0,
         fast_window_sec: float = 300.0,
@@ -300,7 +322,16 @@ class DiscordAutoResponder:
         poll_jitter_pct: float = 0.1,
     ):
         self.auth_token = auth_token
-        self.channel_ids = channel_ids
+        self.responder_enabled = responder_enabled
+        self.config_channel_id = (config_channel_id or "").strip() or None
+        self.default_channel_ids = [
+            channel_id
+            for channel_id in channel_ids
+            if channel_id != self.config_channel_id
+        ]
+        self.channel_ids = list(self.default_channel_ids)
+        self.active_channel_ids = list(self.default_channel_ids)
+        self.active_channel_id_set = set(self.default_channel_ids)
         self.llm_reply_fn = llm_reply_fn
         self.poll_interval_sec = max(3.0, poll_interval_sec)
         self.fast_poll_sec = max(1.0, fast_poll_sec)
@@ -311,22 +342,34 @@ class DiscordAutoResponder:
         self.channel_states: dict[str, ChannelPollState] = {}
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
+        self.channel_config_text: str = ""
+        self.channel_config_message_id: str | None = None
 
     @property
     def enabled(self) -> bool:
-        return bool(self.auth_token and self.channel_ids)
+        return bool(
+            self.responder_enabled
+            and self.auth_token
+            and (self.default_channel_ids or self.config_channel_id)
+        )
 
     def start(self) -> None:
         if not self.enabled or self.thread is not None:
             return
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
+        active_channels = ", ".join(self.active_channel_ids) if self.active_channel_ids else "(none)"
         print(
             "Discord auto-responder enabled "
             "(channels: "
-            f"{', '.join(self.channel_ids)}, fast={self.fast_poll_sec:.1f}s, "
+            f"{active_channels}, fast={self.fast_poll_sec:.1f}s, "
             f"window={self.fast_window_sec:.0f}s, max_backoff={self.poll_interval_sec:.1f}s)"
         )
+        if self.config_channel_id:
+            print(
+                "Discord rules channel enabled "
+                f"(channel: {self.config_channel_id})"
+            )
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -395,6 +438,135 @@ class DiscordAutoResponder:
 
     def _llm_reply(self, messages: list[dict]) -> str:
         return self.llm_reply_fn(messages)[:1800]
+
+    @staticmethod
+    def _extract_channel_ids(text: str) -> list[str]:
+        return re.findall(r"\b\d{15,25}\b", text)
+
+    def _parse_active_channels(self, text: str) -> set[str] | None:
+        raw = text.strip()
+        if not raw:
+            return set(self.default_channel_ids)
+
+        active = set(self.active_channel_id_set)
+        saw_directive = False
+        for line in raw.splitlines():
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            lower = line_stripped.lower()
+            ids = set(self._extract_channel_ids(line_stripped))
+            if lower.startswith(("set", "only", "channels")):
+                active = set(ids)
+                saw_directive = True
+            elif lower.startswith(("enable", "add")):
+                active.update(ids)
+                saw_directive = True
+            elif lower.startswith(("disable", "remove")):
+                active.difference_update(ids)
+                saw_directive = True
+
+        if saw_directive:
+            return active
+
+        ids = set(self._extract_channel_ids(raw))
+        if not ids:
+            return None
+        cleaned = re.sub(r"\b\d{15,25}\b", "", raw)
+        cleaned = re.sub(r"[\s,;|]+", "", cleaned)
+        if cleaned:
+            return None
+        return ids
+
+    def _set_active_channels(self, channels: set[str], source: str) -> None:
+        channels.discard("")
+        if self.config_channel_id:
+            channels.discard(self.config_channel_id)
+
+        new_set = set(channels)
+        if new_set == self.active_channel_id_set:
+            return
+
+        removed = self.active_channel_id_set - new_set
+        for channel_id in removed:
+            self.channel_states.pop(channel_id, None)
+
+        self.active_channel_id_set = new_set
+        self.active_channel_ids = sorted(new_set)
+        if self.active_channel_ids:
+            print(
+                "Discord active channels updated from "
+                f"{source}: {', '.join(self.active_channel_ids)}"
+            )
+        else:
+            print(f"Discord active channels updated from {source}: (none)")
+
+    def _ensure_active_channels_scheduled(
+        self, schedule: list[tuple[float, str]], now: float
+    ) -> None:
+        for idx, channel_id in enumerate(self.active_channel_ids):
+            if channel_id in self.channel_states:
+                continue
+            state = ChannelPollState(
+                channel_id=channel_id,
+                next_poll_at=now + (idx * 0.4),  # Stagger startup reads.
+                interval_sec=self.fast_poll_sec,
+            )
+            self.channel_states[channel_id] = state
+            heapq.heappush(schedule, (state.next_poll_at, channel_id))
+
+    def _refresh_dynamic_rules(self) -> None:
+        if not self.config_channel_id:
+            return
+
+        try:
+            messages = self._discord_request(
+                "GET", f"/channels/{self.config_channel_id}/messages?limit=25"
+            )
+            if not isinstance(messages, list):
+                return
+
+            latest_message_id: str | None = None
+            latest_rules_text = ""
+            for msg in messages:
+                author = msg.get("author", {}) or {}
+                author_id = str(author.get("id", ""))
+                if author_id == self.self_user_id or author.get("bot"):
+                    continue
+                content = (msg.get("content") or "").strip()
+                if not content:
+                    continue
+                latest_message_id = str(msg.get("id", ""))
+                latest_rules_text = content
+                break
+
+            if (
+                latest_message_id == self.channel_config_message_id
+                and latest_rules_text == self.channel_config_text
+            ):
+                return
+
+            self.channel_config_message_id = latest_message_id
+            self.channel_config_text = latest_rules_text
+            parsed_channels = self._parse_active_channels(latest_rules_text)
+            if parsed_channels is None:
+                print(
+                    "Discord config ignored from channel "
+                    f"{self.config_channel_id}; unsupported format in "
+                    f"message {self.channel_config_message_id}"
+                )
+                return
+
+            source = (
+                f"config channel {self.config_channel_id} "
+                f"(message {self.channel_config_message_id})"
+            )
+            self._set_active_channels(parsed_channels, source=source)
+        except urllib.error.HTTPError as e:
+            detail, _ = self._http_error_details(e)
+            print(f"Discord rules refresh failed: {detail}")
+        except Exception as e:
+            print(f"Discord rules refresh error: {e}")
 
     def _llm_reply_with_context_fallback(
         self, state: ChannelPollState, user_message: dict
@@ -469,18 +641,22 @@ class DiscordAutoResponder:
         now = time.monotonic()
         schedule: list[tuple[float, str]] = []
         self.channel_states = {}
-        for idx, channel_id in enumerate(self.channel_ids):
-            state = ChannelPollState(
-                channel_id=channel_id,
-                next_poll_at=now + (idx * 0.4),  # Stagger startup reads.
-                interval_sec=self.fast_poll_sec,
-            )
-            self.channel_states[channel_id] = state
-            heapq.heappush(schedule, (state.next_poll_at, channel_id))
+        self._ensure_active_channels_scheduled(schedule, now)
+        self._refresh_dynamic_rules()
+        self._ensure_active_channels_scheduled(schedule, time.monotonic())
 
-        while not self.stop_event.is_set() and schedule:
+        while not self.stop_event.is_set():
+            if not schedule:
+                if self.stop_event.wait(self.fast_poll_sec):
+                    break
+                self._refresh_dynamic_rules()
+                self._ensure_active_channels_scheduled(schedule, time.monotonic())
+                continue
+
             due_at, channel_id = heapq.heappop(schedule)
-            state = self.channel_states[channel_id]
+            state = self.channel_states.get(channel_id)
+            if state is None:
+                continue
             if abs(due_at - state.next_poll_at) > 0.0001:
                 continue
 
@@ -488,6 +664,11 @@ class DiscordAutoResponder:
             if self.stop_event.wait(wait_sec):
                 break
 
+            # Always refresh rules first before processing any channel poll wake.
+            self._refresh_dynamic_rules()
+            self._ensure_active_channels_scheduled(schedule, time.monotonic())
+            if channel_id not in self.active_channel_id_set:
+                continue
             outcome = self._process_channel(state)
             now = time.monotonic()
             self._schedule_next_poll(state, outcome, now)
@@ -974,6 +1155,8 @@ def main():
         auth_token=DISCORD_AUTH_TOKEN,
         channel_ids=DISCORD_CHANNEL_IDS,
         llm_reply_fn=runtime.chat,
+        config_channel_id=DISCORD_CONFIG_CHANNEL_ID,
+        responder_enabled=DISCORD_RESPONDER_ENABLED,
         poll_interval_sec=DISCORD_BACKOFF_MAX_SEC,
         fast_poll_sec=DISCORD_FAST_POLL_SEC,
         fast_window_sec=DISCORD_FAST_WINDOW_SEC,
@@ -981,7 +1164,9 @@ def main():
         poll_jitter_pct=DISCORD_POLL_JITTER_PCT,
     )
 
-    if discord_worker.enabled:
+    if not DISCORD_RESPONDER_ENABLED:
+        print("Discord auto-responder: disabled (DISCORD_RESPONDER_ENABLED=false)")
+    elif discord_worker.enabled:
         print("Discord auto-responder: enabled")
     else:
         print("Discord auto-responder: disabled (.env not configured)")
