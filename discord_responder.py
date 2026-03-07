@@ -435,16 +435,6 @@ class DiscordAutoResponder:
         author = message.get("author", {}) or {}
         return bool(self._message_content(message) and not author.get("bot") and not self._is_self_message(message))
 
-    @staticmethod
-    def _author_name(message: dict) -> str:
-        author = message.get("author", {}) or {}
-        return (
-            author.get("global_name")
-            or author.get("display_name")
-            or author.get("username")
-            or "user"
-        )
-
     def _update_last_reply_id(self, state: ChannelState, recent: list[dict]) -> None:
         own_messages = [self._message_id(message) for message in recent if self._is_self_message(message)]
         if not own_messages:
@@ -465,36 +455,8 @@ class DiscordAutoResponder:
         if not pending:
             return None
 
-        latest_self_index = max(
-            (idx for idx, message in enumerate(recent) if self._is_self_message(message)),
-            default=-1,
-        )
-        prompt: list[dict] = []
-        for message in recent[: latest_self_index + 1]:
-            content = self._message_content(message)
-            if not content or not self._is_human_message(message) and not self._is_self_message(message):
-                continue
-            if self._is_self_message(message):
-                prompt.append({"role": "assistant", "content": content})
-            else:
-                prompt.append(
-                    {
-                        "role": "user",
-                        "content": f"{self._author_name(message)}: {content}",
-                    }
-                )
-
-        batch = "\n\n".join(
-            f"{self._author_name(message)}: {self._message_content(message)}"
-            for message in pending
-        )
-        prompt.append(
-            {
-                "role": "user",
-                "content": "New Discord messages since your last reply:\n\n" + batch,
-            }
-        )
-        return prompt
+        batch = "\n".join(self._message_content(message) for message in pending)
+        return [{"role": "user", "content": batch}]
 
     def _generate_reply(self, prompt: list[dict], channel_id: str) -> str:
         working = list(prompt)
