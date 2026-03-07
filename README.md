@@ -4,7 +4,7 @@ BitWispr is a single-process local app that shares one Trillim runtime for:
 - LLM (`BitNet-TRNQ` + `BitNet-GenZ-LoRA-TRNQ`)
 - Whisper speech-to-text
 
-There is no local HTTP server/client split anymore. `main.py` instantiates `LLM` and `Whisper` directly and uses them in-process.
+There is no local HTTP server/client split anymore. BitWispr instantiates `LLM` and `Whisper` directly and uses them in-process.
 
 ## Features
 
@@ -74,7 +74,9 @@ Supported config message formats:
 Polling is channel-specific: each channel backs off independently, and any channel with
 successful replies enters fast mode (`DISCORD_FAST_POLL_SEC`) for
 `DISCORD_FAST_WINDOW_SEC` seconds. If channel context overflows, old turns are trimmed
-and retried automatically.
+and retried automatically. Each poll reads only the latest 5 Discord messages and
+batches every human message since BitWispr's most recent reply into one assistant
+response.
 
 ## Autostart (always running)
 
