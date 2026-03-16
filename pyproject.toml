@@ -10,5 +10,5 @@ dependencies = [
     "pynput",
     "evdev",
     "scipy",
-    "trillim[voice]>=0.5.0",
+    "trillim[voice]>=0.6.0",
 ]
