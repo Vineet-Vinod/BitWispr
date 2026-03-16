@@ -2,10 +2,11 @@
 set -euo pipefail
 
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+SERVICE_PATH="${SYSTEMD_USER_DIR}/bitwispr.service"
 
 systemctl --user disable --now bitwispr.service || true
-rm -f "${SYSTEMD_USER_DIR}/bitwispr.service"
-
+rm -f "${SERVICE_PATH}"
 systemctl --user daemon-reload
 
-echo "BitWispr autostart services removed."
+echo "BitWispr autostart service removed."
+

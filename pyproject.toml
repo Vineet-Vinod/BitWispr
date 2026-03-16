@@ -1,14 +1,16 @@
 [project]
 name = "bitwispr"
 version = "0.1.0"
-description = "Voice-to-text app with in-process Trillim runtime (LLM + Whisper)"
+description = "Local dictation and read-aloud desktop daemon built on Trillim Whisper and TTS"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "trillim[voice]>=0.6.0",
     "sounddevice",
     "numpy",
     "pynput",
     "evdev",
-    "scipy",
-    "trillim[voice]>=0.6.0",
 ]
+
+[project.scripts]
+bitwispr = "bitwispr.app:main"

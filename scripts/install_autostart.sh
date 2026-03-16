@@ -4,19 +4,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+SERVICE_PATH="${SYSTEMD_USER_DIR}/bitwispr.service"
+UV_BIN="$(command -v uv)"
+
+if [[ -z "${UV_BIN}" ]]; then
+    echo "uv is required but was not found in PATH."
+    exit 1
+fi
+
+cd "${REPO_DIR}"
+"${UV_BIN}" sync
 
 mkdir -p "${SYSTEMD_USER_DIR}"
 
-cat > "${SYSTEMD_USER_DIR}/bitwispr.service" <<EOF
+cat > "${SERVICE_PATH}" <<EOF
 [Unit]
-Description=BitWispr (STT + Discord Responder)
-After=network-online.target
-Wants=network-online.target
+Description=BitWispr local dictation and read-aloud daemon
+After=graphical-session.target
+Wants=graphical-session.target
 
 [Service]
 Type=simple
 WorkingDirectory=${REPO_DIR}
-ExecStart=${REPO_DIR}/scripts/run_bitwispr.sh
+ExecStart=${UV_BIN} run main.py
 Restart=always
 RestartSec=2
 Environment=PYTHONUNBUFFERED=1
@@ -29,8 +39,9 @@ systemctl --user daemon-reload
 systemctl --user enable --now bitwispr.service
 
 echo
-echo "BitWispr service is installed and started:"
-systemctl --user --no-pager --full status bitwispr.service || true
-echo
-echo "To make user services keep running after logout (optional), run:"
-echo "  sudo loginctl enable-linger ${USER}"
+echo "BitWispr is installed and running."
+echo "Logs: journalctl --user -u bitwispr.service -f"
+echo "X11 tools: xdotool + xclip (or xsel)"
+echo "Wayland tools: wl-clipboard + ydotool (or wtype)"
+echo "Wayland input capture may require: sudo usermod -aG input \$USER"
+

@@ -106,7 +106,6 @@ dependencies = [
     { name = "evdev" },
     { name = "numpy" },
     { name = "pynput" },
-    { name = "scipy" },
     { name = "sounddevice" },
     { name = "trillim", extra = ["voice"] },
 ]
@@ -116,7 +115,6 @@ requires-dist = [
     { name = "evdev" },
     { name = "numpy" },
     { name = "pynput" },
-    { name = "scipy" },
     { name = "sounddevice" },
     { name = "trillim", extras = ["voice"], specifier = ">=0.6.0" },
 ]
