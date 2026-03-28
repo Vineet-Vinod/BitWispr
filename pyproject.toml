@@ -5,7 +5,7 @@ description = "Local dictation and read-aloud desktop daemon built on Trillim Wh
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "trillim[voice]>=0.6.0",
+    "trillim[voice]>=0.7.1",
     "sounddevice",
     "numpy",
     "pynput",

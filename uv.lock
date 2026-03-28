@@ -116,7 +116,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "pynput" },
     { name = "sounddevice" },
-    { name = "trillim", extras = ["voice"], specifier = ">=0.6.0" },
+    { name = "trillim", extras = ["voice"], specifier = ">=0.7.1" },
 ]
 
 [[package]]
@@ -1862,6 +1862,25 @@ wheels = [
 ]
 
 [[package]]
+name = "soundfile"
+version = "0.13.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cffi" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e1/41/9b873a8c055582859b239be17902a85339bec6a30ad162f98c9b0288a2cc/soundfile-0.13.1.tar.gz", hash = "sha256:b2c68dab1e30297317080a5b43df57e302584c49e2942defdde0acccc53f0e5b", size = 46156, upload-time = "2025-01-25T09:17:04.831Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/28/e2a36573ccbcf3d57c00626a21fe51989380636e821b341d36ccca0c1c3a/soundfile-0.13.1-py2.py3-none-any.whl", hash = "sha256:a23c717560da2cf4c7b5ae1142514e0fd82d6bbd9dfc93a50423447142f2c445", size = 25751, upload-time = "2025-01-25T09:16:44.235Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/ab/73e97a5b3cc46bba7ff8650a1504348fa1863a6f9d57d7001c6b67c5f20e/soundfile-0.13.1-py2.py3-none-macosx_10_9_x86_64.whl", hash = "sha256:82dc664d19831933fe59adad199bf3945ad06d84bc111a5b4c0d3089a5b9ec33", size = 1142250, upload-time = "2025-01-25T09:16:47.583Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/e5/58fd1a8d7b26fc113af244f966ee3aecf03cb9293cb935daaddc1e455e18/soundfile-0.13.1-py2.py3-none-macosx_11_0_arm64.whl", hash = "sha256:743f12c12c4054921e15736c6be09ac26b3b3d603aef6fd69f9dde68748f2593", size = 1101406, upload-time = "2025-01-25T09:16:49.662Z" },
+    { url = "https://files.pythonhosted.org/packages/58/ae/c0e4a53d77cf6e9a04179535766b3321b0b9ced5f70522e4caf9329f0046/soundfile-0.13.1-py2.py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:9c9e855f5a4d06ce4213f31918653ab7de0c5a8d8107cd2427e44b42df547deb", size = 1235729, upload-time = "2025-01-25T09:16:53.018Z" },
+    { url = "https://files.pythonhosted.org/packages/57/5e/70bdd9579b35003a489fc850b5047beeda26328053ebadc1fb60f320f7db/soundfile-0.13.1-py2.py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:03267c4e493315294834a0870f31dbb3b28a95561b80b134f0bd3cf2d5f0e618", size = 1313646, upload-time = "2025-01-25T09:16:54.872Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/df/8c11dc4dfceda14e3003bb81a0d0edcaaf0796dd7b4f826ea3e532146bba/soundfile-0.13.1-py2.py3-none-win32.whl", hash = "sha256:c734564fab7c5ddf8e9be5bf70bab68042cd17e9c214c06e365e20d64f9a69d5", size = 899881, upload-time = "2025-01-25T09:16:56.663Z" },
+    { url = "https://files.pythonhosted.org/packages/14/e9/6b761de83277f2f02ded7e7ea6f07828ec78e4b229b80e4ca55dd205b9dc/soundfile-0.13.1-py2.py3-none-win_amd64.whl", hash = "sha256:1e70a05a0626524a69e9f0f4dd2ec174b4e9567f4d8b6c11d38b5c289be36ee9", size = 1019162, upload-time = "2025-01-25T09:16:59.573Z" },
+]
+
+[[package]]
 name = "starlette"
 version = "0.50.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2034,7 +2053,7 @@ wheels = [
 
 [[package]]
 name = "trillim"
-version = "0.6.0"
+version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ddgs" },
@@ -2047,12 +2066,12 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/47/ad4b97797f5b30376b822b62c9f72d40779ff8d72822fa488bad99e0c704/trillim-0.6.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2ba505307a9f08d5f0b5810ade9373f2050e4a860595b3a7470eeb83f1be9989", size = 2271627, upload-time = "2026-03-16T05:49:23.563Z" },
-    { url = "https://files.pythonhosted.org/packages/39/6f/8b9346b71eb37191703b733ac9684e38b52f2781e27298efe5f96340a91d/trillim-0.6.0-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:b6064a381aa7b627d72c606c0034bec0c3f083a35af512d61c8b8bb0dcfd0e24", size = 2163953, upload-time = "2026-03-16T05:49:26.952Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/0a/0d96cfcf6363ef90475c51eb70a63a58ce342903509a786337ef604ccdcb/trillim-0.6.0-py3-none-manylinux_2_27_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ddca33a97d2eee1e54847cce906d047ab2717edd8b2c86e2738b985ddaf8162d", size = 12833888, upload-time = "2026-03-16T05:49:37.873Z" },
-    { url = "https://files.pythonhosted.org/packages/7d/84/2499986f0f090cb0a418a192b1e2e8f348fe411cb2618db0611a4ba3750a/trillim-0.6.0-py3-none-manylinux_2_27_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2eff2fd04fd004699d793278dcdeb6171927bb48047fdf7a7c163bce5557a28f", size = 12500878, upload-time = "2026-03-16T05:49:48.904Z" },
-    { url = "https://files.pythonhosted.org/packages/c8/88/ae5c46c4b1807fc2578dcac62511f154537dd90c237ebf6c656c13aca1b8/trillim-0.6.0-py3-none-win_amd64.whl", hash = "sha256:4b3e956ee6f1c935a87e76d4c62abc6b70ffcedb1d11252bba34a13c4e8169cc", size = 2538612, upload-time = "2026-03-16T05:49:53.218Z" },
-    { url = "https://files.pythonhosted.org/packages/75/a7/c66879789260d9506e9b15e727cebcf2a13597ba02880f7f4335f594a3a3/trillim-0.6.0-py3-none-win_arm64.whl", hash = "sha256:875422246a94bb4401799eb0072432efb87147f5bb05533eec5400f8db330a0b", size = 2391667, upload-time = "2026-03-16T05:49:56.996Z" },
+    { url = "https://files.pythonhosted.org/packages/06/9a/da123134ba7f0cad44bebc4681a22c827544eed14d4d1fc0ed167517d38f/trillim-0.7.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2cf06d10e9657f77931eda8f4f001292dd9d23abb21d3e43b915a024f858bd2e", size = 1263983, upload-time = "2026-03-28T02:44:10.446Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/d8/d4feac544cdaefc91328976000d89488fcb349617847d60f52361b79e92f/trillim-0.7.1-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:f567944e6d748e073ab4edd73c53b56d29d30e0e7642c88f5d4ae918e2ac0ba2", size = 1262131, upload-time = "2026-03-28T02:44:12.183Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/88/486e946824a4368efb27e055b1bb148351b0ca23ce2b814b266d55643457/trillim-0.7.1-py3-none-manylinux_2_27_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2268ee4b0b40c7926dda1630268ab3a2202bbc49ef9b1e8ebf0033154d6401b3", size = 4910045, upload-time = "2026-03-28T02:44:16.877Z" },
+    { url = "https://files.pythonhosted.org/packages/71/7d/07879f596bd23178d633a99752bb5ad64095686f55688335f0d1036faf59/trillim-0.7.1-py3-none-manylinux_2_27_x86_64.manylinux2014_x86_64.whl", hash = "sha256:625a5ec10065d32930b3bd76ae0633cd5231705d0cff730345aa358d2a47ccb3", size = 4933310, upload-time = "2026-03-28T02:44:19.601Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/81/b56a17ec00c83d06d56fba7d241476a049fa92aeb5d0cd412a4f66e04981/trillim-0.7.1-py3-none-win_amd64.whl", hash = "sha256:7a1dfabb1c9867210ec98b39a8f25d261762b228e2da9b1fac16b5a7ba33f7c4", size = 1568214, upload-time = "2026-03-28T02:44:08.179Z" },
+    { url = "https://files.pythonhosted.org/packages/93/8e/f49d7065965f0c02dc672a5aff9d1904c7ca6482905365776cb4299411c1/trillim-0.7.1-py3-none-win_arm64.whl", hash = "sha256:5880d1d8e1332b572522d1ff2664d3ca8b8d40cdc91a5b68885ad705b39d60a6", size = 1478677, upload-time = "2026-03-28T02:44:13.863Z" },
 ]
 
 [package.optional-dependencies]
@@ -2060,7 +2079,7 @@ voice = [
     { name = "faster-whisper" },
     { name = "numpy" },
     { name = "pocket-tts" },
-    { name = "python-multipart" },
+    { name = "soundfile" },
 ]
 
 [[package]]
