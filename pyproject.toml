@@ -1,7 +1,7 @@
 [project]
 name = "bitwispr"
 version = "0.1.0"
-description = "Local dictation and read-aloud desktop daemon built on Trillim Whisper and TTS"
+description = "Local dictation, discord spammer and read-aloud desktop daemon built on Trillim"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
