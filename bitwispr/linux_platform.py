@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 
 def is_wayland_session() -> bool:
@@ -87,10 +90,12 @@ def type_text(text: str, *, wayland: bool) -> bool:
             return True
 
     if wayland:
-        print("Could not type text. Install `ydotool` or `wtype` for Wayland output.")
+        logger.warning(
+            "Could not type text. Install `ydotool` or `wtype` for Wayland output."
+        )
     else:
-        print("Could not type text. Install `xdotool` for X11 output.")
-    print(f"Text was: {text}")
+        logger.warning("Could not type text. Install `xdotool` for X11 output.")
+    logger.warning("Falling back to logging typed text: %r", text)
     return False
 
 
@@ -103,6 +108,7 @@ def run_hotkey_loop(
     keyboard_scan_interval_sec: float,
 ) -> None:
     if wayland:
+        logger.info("Using evdev hotkey backend for Wayland")
         _run_with_evdev(
             on_dictation=on_dictation,
             on_reader=on_reader,
@@ -110,6 +116,7 @@ def run_hotkey_loop(
             keyboard_scan_interval_sec=keyboard_scan_interval_sec,
         )
     else:
+        logger.info("Using pynput hotkey backend for X11")
         _run_with_pynput(
             on_dictation=on_dictation,
             on_reader=on_reader,
@@ -184,7 +191,7 @@ def _run_with_evdev(
                 "dictation_latched": False,
                 "read_latched": False,
             }
-            print(f"  + Keyboard: {device.name} ({path})")
+            logger.info("Keyboard attached: %s (%s)", device.name, path)
 
     def remove_keyboard(path: str) -> None:
         device = devices.pop(path, None)
@@ -218,7 +225,7 @@ def _run_with_evdev(
 
     add_new_keyboards()
     if not devices:
-        print("No keyboard devices detected yet. Waiting for evdev devices...")
+        logger.warning("No keyboard devices detected yet. Waiting for evdev devices...")
 
     last_scan = time.monotonic()
     while not stop_event.is_set():
@@ -235,7 +242,7 @@ def _run_with_evdev(
             try:
                 events = device.read()
             except OSError:
-                print(f"  - Keyboard disconnected: {device.name} ({path})")
+                logger.info("Keyboard disconnected: %s (%s)", device.name, path)
                 remove_keyboard(path)
                 continue
 

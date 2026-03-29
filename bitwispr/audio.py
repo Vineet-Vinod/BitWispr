@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import queue
 import threading
 import wave
@@ -13,6 +14,8 @@ try:
 except Exception:
     PCM_CHANNELS = 1
     PCM_SAMPLE_RATE = 24000
+
+logger = logging.getLogger(__name__)
 
 
 def detect_input_sample_rate() -> int:
@@ -52,6 +55,11 @@ class MicrophoneRecorder:
     def start(self) -> None:
         if self._stream is not None:
             return
+        logger.info(
+            "Starting microphone input stream at %s Hz (blocksize=%s)",
+            self.sample_rate,
+            self.blocksize,
+        )
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=1,
@@ -66,6 +74,7 @@ class MicrophoneRecorder:
         self._stream = None
         if stream is None:
             return
+        logger.info("Closing microphone input stream")
         stream.stop()
         stream.close()
 
@@ -89,7 +98,7 @@ class MicrophoneRecorder:
 
     def _audio_callback(self, indata, frames, time_info, status) -> None:
         if status:
-            print(f"Audio input status: {status}")
+            logger.warning("Audio input status: %s", status)
 
         with self._lock:
             if not self._recording:
@@ -144,6 +153,12 @@ class SpeechPlayer:
 
             stream: sd.RawOutputStream | None = None
             try:
+                logger.info(
+                    "Starting TTS stream playback (%s chars, voice=%s, speed=%s)",
+                    len(text),
+                    voice,
+                    speed,
+                )
                 stream = sd.RawOutputStream(
                     samplerate=PCM_SAMPLE_RATE,
                     channels=PCM_CHANNELS,
@@ -157,10 +172,11 @@ class SpeechPlayer:
                             break
                     if chunk:
                         stream.write(chunk)
+                logger.info("Completed TTS stream playback")
             except Exception as exc:
                 with self._lock:
                     if generation == self._generation:
-                        print(f"TTS streaming playback failed: {exc}")
+                        logger.exception("TTS streaming playback failed: %s", exc)
             finally:
                 if stream is not None:
                     stream.stop()

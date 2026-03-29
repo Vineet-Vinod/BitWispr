@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 import threading
 from pathlib import Path
 
 from trillim import LLM, Runtime, STT, TTS
 
 from bitwispr.audio import MicrophoneRecorder, SpeechPlayer, audio_to_wav_bytes
-from bitwispr.config import AppConfig, StateStore
+from bitwispr.config import AppConfig, StateStore, load_env_file
 from bitwispr.discord import DiscordWorker
 from bitwispr.linux_platform import (
     is_wayland_session,
@@ -15,6 +16,9 @@ from bitwispr.linux_platform import (
     run_hotkey_loop,
     type_text,
 )
+from bitwispr.logging_utils import configure_logging
+
+logger = logging.getLogger(__name__)
 
 
 class BitWisprApp:
@@ -40,10 +44,13 @@ class BitWisprApp:
 
     def run(self) -> None:
         self._print_startup_banner()
+        logger.info("Starting microphone recorder")
         self.recorder.start()
+        logger.info("Starting Discord worker")
         self.discord.start()
 
         try:
+            logger.info("Entering hotkey loop")
             run_hotkey_loop(
                 on_dictation=self.toggle_dictation,
                 on_reader=self.read_current_selection,
@@ -58,6 +65,7 @@ class BitWisprApp:
         if self._shutdown.is_set():
             return
         self._shutdown.set()
+        logger.info("Shutting down BitWispr app")
         self.discord.stop()
         self.recorder.close()
         self.player.close()
@@ -67,7 +75,7 @@ class BitWisprApp:
             try:
                 future.result(timeout=30)
             except Exception as exc:
-                print(f"Stopping with an unfinished transcription: {exc}")
+                logger.warning("Stopping with an unfinished transcription: %s", exc)
 
         self._executor.shutdown(wait=False, cancel_futures=True)
 
@@ -80,7 +88,7 @@ class BitWisprApp:
     def read_current_selection(self) -> None:
         text = read_selected_text(self.config.selection_mode, wayland=self.wayland)
         if not text:
-            print(
+            logger.warning(
                 "No highlighted text found. On Wayland install `wl-clipboard`; "
                 "on X11 install `xclip` or `xsel`."
             )
@@ -88,35 +96,46 @@ class BitWisprApp:
 
         normalized = " ".join(text.split())
         if not normalized:
-            print("The current selection is empty.")
+            logger.warning("The current selection is empty")
             return
 
         state = self.state_store.snapshot()
-        print(f"Reading {len(normalized)} characters...")
-        self.player.play(
+        logger.info(
+            "Reading %s characters with voice=%s speed=%s",
+            len(normalized),
+            state.voice,
+            state.speed,
+        )
+        if not self.player.play(
             normalized,
             voice=state.voice,
             speed=state.speed,
-        )
+        ):
+            logger.warning("Reader play request was rejected because the text was empty")
 
     def _start_recording(self) -> None:
         if self._transcription_in_progress():
-            print("Please wait for the current transcription to finish.")
+            logger.warning("Ignoring dictation start while transcription is in progress")
             return
         if not self.recorder.begin_recording():
+            logger.warning("Ignoring dictation start because recording is already active")
             return
-        print("Recording started. Press Right Ctrl + Right Alt again to stop.")
+        logger.info("Recording started. Press Right Ctrl + Right Alt again to stop.")
 
     def _stop_recording(self) -> None:
         audio = self.recorder.finish_recording()
-        print("Recording stopped.")
+        logger.info("Recording stopped")
 
         min_samples = int(self.recorder.sample_rate * self.config.min_recording_sec)
         if audio.size < min_samples:
-            print("Recording was too short.")
+            logger.warning(
+                "Recording was too short (%s samples; need at least %s)",
+                audio.size,
+                min_samples,
+            )
             return
 
-        print("Transcribing...")
+        logger.info("Submitting audio for transcription (%s samples)", audio.size)
         self._transcription_future = self._executor.submit(
             self._transcribe_and_type,
             audio,
@@ -129,19 +148,20 @@ class BitWisprApp:
     def _transcribe_and_type(self, audio) -> None:
         try:
             wav_bytes = audio_to_wav_bytes(audio, self.recorder.sample_rate)
+            logger.info("Starting STT transcription (%s bytes WAV)", len(wav_bytes))
             text = self.runtime.stt.transcribe_bytes(
                 wav_bytes,
                 language=self.config.whisper_language,
             ).strip()
-        except Exception as exc:
-            print(f"Transcription failed: {exc}")
+        except Exception:
+            logger.exception("Transcription failed")
             return
 
         if not text:
-            print("No speech detected.")
+            logger.info("No speech detected")
             return
 
-        print(f"Transcribed: {text}")
+        logger.info("Transcribed text: %r", text)
         type_text(text + self.config.dictation_suffix, wayland=self.wayland)
 
     def _print_startup_banner(self) -> None:
@@ -168,24 +188,38 @@ class BitWisprApp:
 def main() -> int:
     env_file = Path(__file__).resolve().parents[1] / ".env"
     try:
-        config = AppConfig.from_env(env_file=env_file)
+        load_env_file(env_file)
+        configure_logging()
+        logger.info("Loaded environment from %s", env_file)
+        config = AppConfig.from_env()
+        configure_logging(level_name=config.log_level, log_file=config.log_file)
+        logger.info("BitWispr configuration loaded")
+        logger.info("Mutable state file: %s", config.state_path)
         state_store = StateStore(
             config.state_path,
             default_voice=config.default_voice,
             default_speed=config.default_speed,
         )
         state = state_store.snapshot()
+        logger.info(
+            "Starting Trillim runtime with model=%s adapter=%s voice=%s speed=%s",
+            config.model_id,
+            config.adapter_id,
+            state.voice,
+            state.speed,
+        )
         with Runtime(
             LLM(config.model_id, lora_dir=config.adapter_id),
             STT(),
             TTS(default_voice=state.voice, speed=state.speed),
         ) as runtime:
+            logger.info("Trillim runtime started")
             app = BitWisprApp(config, runtime, state_store)
             app.run()
     except KeyboardInterrupt:
-        print("\nExiting...")
+        logger.info("Exiting on keyboard interrupt")
         return 0
-    except Exception as exc:
-        print(f"BitWispr failed to start: {exc}")
+    except Exception:
+        logger.exception("BitWispr failed to start")
         return 1
     return 0

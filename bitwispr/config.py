@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def load_env_file(path: Path) -> None:
@@ -65,6 +68,8 @@ class AppConfig:
     discord_auth_token: str
     control_channel_id: str
     state_path: Path
+    log_level: str
+    log_file: Path | None
     control_poll_interval_sec: float
     responder_poll_interval_sec: float
     responder_backoff_factor: float
@@ -111,6 +116,12 @@ class AppConfig:
             state_path=Path(
                 os.environ.get("BITWISPR_STATE_PATH", str(_default_state_path()))
             ).expanduser(),
+            log_level=_env_str("BITWISPR_LOG_LEVEL", "INFO"),
+            log_file=(
+                Path(os.environ["BITWISPR_LOG_FILE"]).expanduser()
+                if os.environ.get("BITWISPR_LOG_FILE", "").strip()
+                else None
+            ),
             control_poll_interval_sec=max(
                 5.0,
                 _env_float("BITWISPR_CONTROL_POLL_INTERVAL_SEC", 30.0),
@@ -172,14 +183,24 @@ class StateStore:
             channels={},
         )
         if not self.path.exists():
+            logger.info("State file %s does not exist; using defaults", self.path)
             return default_state
 
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed to load state file %s; using defaults: %s",
+                self.path,
+                exc,
+            )
             return default_state
 
         if not isinstance(payload, dict):
+            logger.warning(
+                "State file %s does not contain a JSON object; using defaults",
+                self.path,
+            )
             return default_state
 
         channels_raw = payload.get("channels", {})
@@ -215,6 +236,7 @@ class StateStore:
             encoding="utf-8",
         )
         tmp_path.replace(self.path)
+        logger.debug("Persisted state to %s", self.path)
 
     def snapshot(self) -> MutableState:
         with self._lock:
