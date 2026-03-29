@@ -593,22 +593,15 @@ class DiscordWorker:
 
             lines: list[str] = []
             for message in messages:
-                author = message.get("author", {}) or {}
-                username = (
-                    str(author.get("global_name") or author.get("username") or "unknown")
-                    .strip()
-                    or "unknown"
-                )
                 content = str(message.get("content", "") or "").strip()
                 if not content:
                     continue
-                lines.append(f"{username}: {_normalize_message_text(content)}")
+                lines.append(_normalize_message_text(content))
 
             if not lines:
                 logger.debug("No textual messages to include in prompt for %s", state.name)
                 return result
 
-            lines.append(f"{self.self_username}:")
             prompt = "\n".join(lines)
             logger.info(
                 "Generating reply for channel %s using %s messages (%s chars)",
