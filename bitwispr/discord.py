@@ -327,6 +327,23 @@ class DiscordWorker:
 
     def _apply_control_command(self, command: str) -> dict[str, object] | None:
         upper = command.upper()
+        if upper == "HELP":
+            return self._state_response(
+                extra={
+                    "help": [
+                        "LIST VOICE - TTS list voices",
+                        "SET VOICE <voice_id> - set the current voice",
+                        "ADD CHANNEL <channel_id> <name> - add a response channel",
+                        "LIST CHANNEL - list configured response channels",
+                        "DELETE CHANNEL <name> - delete a configured channel by name",
+                        "START - enable the Discord responder",
+                        "STOP - disable the Discord responder",
+                        "SET SPEED <float_value> - clamp to [0.25, 4.0] and set TTS speed",
+                        "HELP - print this command list",
+                    ]
+                }
+            )
+
         if upper in {"LIST VOICE", "LIST VOICES"}:
             try:
                 voices = sorted(self._list_voices())

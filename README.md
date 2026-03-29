@@ -29,6 +29,7 @@ applies new commands oldest to newest from the last 15 messages.
 
 Supported commands:
 
+- `HELP`
 - `LIST VOICE`
 - `SET VOICE <voice_id>`
 - `ADD CHANNEL <channel_id> <name>`
