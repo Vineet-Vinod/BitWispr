@@ -5,7 +5,7 @@ description = "Local dictation, discord spammer and read-aloud desktop daemon bu
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "trillim[voice]>=0.7.1",
+    "trillim[voice]>=0.7.2",
     "sounddevice",
     "numpy",
     "pynput",
