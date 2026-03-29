@@ -24,7 +24,7 @@ class BitWisprApp:
         self.state_store = state_store
         self.wayland = is_wayland_session()
         self.recorder = MicrophoneRecorder(sample_rate=config.input_sample_rate)
-        self.player = SpeechPlayer(self.runtime.tts.synthesize_wav)
+        self.player = SpeechPlayer(self.runtime.tts.synthesize_stream)
         self.discord = DiscordWorker(
             config,
             state_store,

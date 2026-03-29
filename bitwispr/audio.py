@@ -8,6 +8,12 @@ import wave
 import numpy as np
 import sounddevice as sd
 
+try:
+    from trillim.components.tts.public import PCM_CHANNELS, PCM_SAMPLE_RATE
+except Exception:
+    PCM_CHANNELS = 1
+    PCM_SAMPLE_RATE = 24000
+
 
 def detect_input_sample_rate() -> int:
     try:
@@ -92,8 +98,8 @@ class MicrophoneRecorder:
 
 
 class SpeechPlayer:
-    def __init__(self, synthesize_wav_fn):
-        self._synthesize_wav_fn = synthesize_wav_fn
+    def __init__(self, synthesize_stream_fn):
+        self._synthesize_stream_fn = synthesize_stream_fn
         self._queue: queue.Queue[tuple[int, str, str | None, float | None] | None] = (
             queue.Queue()
         )
@@ -136,47 +142,26 @@ class SpeechPlayer:
                 if generation != self._generation:
                     continue
 
+            stream: sd.RawOutputStream | None = None
             try:
-                wav_bytes = self._synthesize_wav_fn(text, voice=voice, speed=speed)
-            except Exception as exc:
-                with self._lock:
-                    if generation == self._generation:
-                        print(f"TTS synthesis failed: {exc}")
-                continue
-
-            with self._lock:
-                if generation != self._generation:
-                    continue
-            self._play_wav(generation, wav_bytes)
-
-    def _play_wav(self, generation: int, wav_bytes: bytes) -> None:
-        stream: sd.RawOutputStream | None = None
-        try:
-            with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
-                sampwidth = wav_file.getsampwidth()
-                if sampwidth != 2:
-                    raise RuntimeError(f"Unsupported TTS sample width: {sampwidth}")
-
                 stream = sd.RawOutputStream(
-                    samplerate=wav_file.getframerate(),
-                    channels=wav_file.getnchannels(),
+                    samplerate=PCM_SAMPLE_RATE,
+                    channels=PCM_CHANNELS,
                     dtype="int16",
                 )
                 stream.start()
 
-                while True:
-                    chunk = wav_file.readframes(4096)
-                    if not chunk:
-                        break
+                for chunk in self._synthesize_stream_fn(text, voice=voice, speed=speed):
                     with self._lock:
                         if generation != self._generation:
                             break
-                    stream.write(chunk)
-        except Exception as exc:
-            with self._lock:
-                if generation == self._generation:
-                    print(f"TTS playback failed: {exc}")
-        finally:
-            if stream is not None:
-                stream.stop()
-                stream.close()
+                    if chunk:
+                        stream.write(chunk)
+            except Exception as exc:
+                with self._lock:
+                    if generation == self._generation:
+                        print(f"TTS streaming playback failed: {exc}")
+            finally:
+                if stream is not None:
+                    stream.stop()
+                    stream.close()
