@@ -258,8 +258,8 @@ class DiscordWorker:
 
         return compact[:2000]
 
-    def _post_message(self, channel_id: str, content: str) -> None:
-        self._discord_request(
+    def _post_message(self, channel_id: str, content: str) -> dict | list:
+        return self._discord_request(
             "POST",
             f"/channels/{channel_id}/messages",
             payload={"content": content},
@@ -299,10 +299,6 @@ class DiscordWorker:
                 continue
 
             self.control_last_seen_id = message_id
-            author = message.get("author", {}) or {}
-            if str(author.get("id", "")) == self.self_user_id:
-                continue
-
             content = str(message.get("content", "") or "").strip()
             if not content:
                 continue
@@ -415,7 +411,7 @@ class DiscordWorker:
                 return self._state_response()
             return None
 
-        return self._state_response(errors=[f"unknown command: {command}"])
+        return None
 
     def _schedule_next_poll(
         self,
