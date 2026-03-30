@@ -25,7 +25,11 @@ def _run_text_command(command: list[str], timeout: float = 5.0) -> str | None:
             text=True,
             timeout=timeout,
         )
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
         return None
 
     text = result.stdout.strip()
@@ -103,6 +107,7 @@ def run_hotkey_loop(
     *,
     on_dictation,
     on_reader,
+    on_pause_toggle,
     stop_event: threading.Event,
     wayland: bool,
     keyboard_scan_interval_sec: float,
@@ -112,6 +117,7 @@ def run_hotkey_loop(
         _run_with_evdev(
             on_dictation=on_dictation,
             on_reader=on_reader,
+            on_pause_toggle=on_pause_toggle,
             stop_event=stop_event,
             keyboard_scan_interval_sec=keyboard_scan_interval_sec,
         )
@@ -120,6 +126,7 @@ def run_hotkey_loop(
         _run_with_pynput(
             on_dictation=on_dictation,
             on_reader=on_reader,
+            on_pause_toggle=on_pause_toggle,
             stop_event=stop_event,
         )
 
@@ -128,6 +135,7 @@ def _run_with_evdev(
     *,
     on_dictation,
     on_reader,
+    on_pause_toggle,
     stop_event: threading.Event,
     keyboard_scan_interval_sec: float,
 ) -> None:
@@ -137,11 +145,12 @@ def _run_with_evdev(
     except ImportError as exc:
         raise RuntimeError("`evdev` is required for Wayland hotkeys") from exc
 
-    from selectors import DefaultSelector, EVENT_READ
+    from selectors import EVENT_READ, DefaultSelector
 
     ctrl_keys = {ecodes.KEY_RIGHTCTRL}
     alt_keys = {ecodes.KEY_RIGHTALT}
     shift_keys = {ecodes.KEY_RIGHTSHIFT}
+    letter_p_keys = {ecodes.KEY_P}
     if hasattr(ecodes, "KEY_ALTGR"):
         alt_keys.add(ecodes.KEY_ALTGR)
     if hasattr(ecodes, "KEY_ISO_LEVEL3_SHIFT"):
@@ -188,8 +197,10 @@ def _run_with_evdev(
                 "ctrl": False,
                 "alt": False,
                 "shift": False,
+                "p": False,
                 "dictation_latched": False,
                 "read_latched": False,
+                "pause_latched": False,
             }
             logger.info("Keyboard attached: %s (%s)", device.name, path)
 
@@ -210,6 +221,7 @@ def _run_with_evdev(
     def update_combos(device_state: dict[str, bool], is_key_down: bool) -> None:
         dictation_down = device_state["ctrl"] and device_state["alt"]
         reader_down = device_state["ctrl"] and device_state["shift"]
+        pause_down = device_state["alt"] and device_state["p"]
 
         if dictation_down and is_key_down and not device_state["dictation_latched"]:
             on_dictation()
@@ -222,6 +234,12 @@ def _run_with_evdev(
             device_state["read_latched"] = True
         elif not reader_down:
             device_state["read_latched"] = False
+
+        if pause_down and is_key_down and not device_state["pause_latched"]:
+            on_pause_toggle()
+            device_state["pause_latched"] = True
+        elif not pause_down:
+            device_state["pause_latched"] = False
 
     add_new_keyboards()
     if not devices:
@@ -258,13 +276,21 @@ def _run_with_evdev(
                     device_state["alt"] = is_key_down
                 elif event.code in shift_keys:
                     device_state["shift"] = is_key_down
+                elif event.code in letter_p_keys:
+                    device_state["p"] = is_key_down
                 else:
                     continue
 
                 update_combos(device_state, event.value == 1)
 
 
-def _run_with_pynput(*, on_dictation, on_reader, stop_event: threading.Event) -> None:
+def _run_with_pynput(
+    *,
+    on_dictation,
+    on_reader,
+    on_pause_toggle,
+    stop_event: threading.Event,
+) -> None:
     try:
         from pynput import keyboard
     except ImportError as exc:
@@ -274,8 +300,10 @@ def _run_with_pynput(*, on_dictation, on_reader, stop_event: threading.Event) ->
         "ctrl": False,
         "alt": False,
         "shift": False,
+        "p": False,
         "dictation_latched": False,
         "read_latched": False,
+        "pause_latched": False,
     }
 
     ctrl_keys = {keyboard.Key.ctrl_r}
@@ -284,6 +312,17 @@ def _run_with_pynput(*, on_dictation, on_reader, stop_event: threading.Event) ->
     if alt_gr is not None:
         alt_keys.add(alt_gr)
     shift_keys = {keyboard.Key.shift_r}
+    listener_ref: list[keyboard.Listener | None] = [None]
+
+    def canonicalize(key):
+        listener = listener_ref[0]
+        if listener is None:
+            return key
+        return listener.canonical(key)
+
+    def is_letter_p(key) -> bool:
+        char = getattr(key, "char", None)
+        return isinstance(char, str) and char.lower() == "p"
 
     def update_state(key, is_pressed: bool) -> None:
         if key in ctrl_keys:
@@ -292,11 +331,14 @@ def _run_with_pynput(*, on_dictation, on_reader, stop_event: threading.Event) ->
             state["alt"] = is_pressed
         elif key in shift_keys:
             state["shift"] = is_pressed
+        elif is_letter_p(key):
+            state["p"] = is_pressed
         else:
             return
 
         dictation_down = state["ctrl"] and state["alt"]
         reader_down = state["ctrl"] and state["shift"]
+        pause_down = state["alt"] and state["p"]
 
         if dictation_down and is_pressed and not state["dictation_latched"]:
             on_dictation()
@@ -310,12 +352,19 @@ def _run_with_pynput(*, on_dictation, on_reader, stop_event: threading.Event) ->
         elif not reader_down:
             state["read_latched"] = False
 
+        if pause_down and is_pressed and not state["pause_latched"]:
+            on_pause_toggle()
+            state["pause_latched"] = True
+        elif not pause_down:
+            state["pause_latched"] = False
+
     def on_press(key) -> None:
-        update_state(key, True)
+        update_state(canonicalize(key), True)
 
     def on_release(key) -> None:
-        update_state(key, False)
+        update_state(canonicalize(key), False)
 
     with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+        listener_ref[0] = listener
         while not stop_event.is_set():
             listener.join(0.5)

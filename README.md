@@ -4,6 +4,7 @@ BitWispr is one local background app with three features:
 
 - dictation with `Right Ctrl + Right Alt`
 - highlighted-text reader with `Right Ctrl + Right Shift`
+- reader pause/resume with `Right Alt + P`
 - Discord responder controlled from a Discord channel
 
 The app uses the Trillim Python SDK directly for:
@@ -18,9 +19,12 @@ Only OS integration and Discord REST polling are custom.
 
 - `Right Ctrl + Right Alt`: toggle dictation
 - `Right Ctrl + Right Shift`: read the current selection aloud
+- `Right Alt + P`: pause or resume active reader playback
 
 Dictation types the transcript into the active app. Reader uses the current saved
-voice and speed.
+voice and speed. If you change speed through Discord while the reader is active,
+future generated audio in the current session updates in place. Voice changes
+apply to future reader sessions only.
 
 ## Discord Control
 

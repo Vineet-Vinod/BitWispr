@@ -48,11 +48,13 @@ class DiscordWorker:
         *,
         llm_chat,
         list_voices,
+        on_speed_change=None,
     ):
         self.config = config
         self.state_store = state_store
         self._llm_chat = llm_chat
         self._list_voices = list_voices
+        self._on_speed_change = on_speed_change
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.self_user_id: str | None = None
@@ -129,7 +131,9 @@ class DiscordWorker:
 
             self._sync_channel_states(time.monotonic())
             if not self.state_store.snapshot().responder_active:
-                logger.debug("Discord responder is stopped; skipping response-channel polls")
+                logger.debug(
+                    "Discord responder is stopped; skipping response-channel polls"
+                )
                 continue
 
             now = time.monotonic()
@@ -366,7 +370,9 @@ class DiscordWorker:
 
         for message in messages:
             message_id = str(message.get("id", ""))
-            if _snowflake_value(message_id) <= _snowflake_value(self.control_last_seen_id):
+            if _snowflake_value(message_id) <= _snowflake_value(
+                self.control_last_seen_id
+            ):
                 continue
 
             self.control_last_seen_id = message_id
@@ -379,7 +385,11 @@ class DiscordWorker:
                 command = line.strip()
                 if not command:
                     continue
-                logger.info("Processing control command from message %s: %r", message_id, command)
+                logger.info(
+                    "Processing control command from message %s: %r",
+                    message_id,
+                    command,
+                )
                 response = self._apply_control_command(command)
                 if response is None:
                     logger.debug("Ignoring non-command control line: %r", command)
@@ -472,8 +482,22 @@ class DiscordWorker:
             except ValueError:
                 logger.warning("SET SPEED received invalid value %r", raw_value)
                 return self._state_response(errors=[f"invalid speed: {raw_value}"])
-            if self.state_store.set_speed(speed):
-                logger.info("Control command set speed to %s", speed)
+            changed = self.state_store.set_speed(speed)
+            current_speed = self.state_store.snapshot().speed
+            active_session_updated = False
+            if self._on_speed_change is not None:
+                try:
+                    active_session_updated = bool(self._on_speed_change(current_speed))
+                except Exception:
+                    logger.exception("SET SPEED failed to update active reader session")
+            if changed:
+                logger.info("Control command set speed to %s", current_speed)
+                return self._state_response()
+            if active_session_updated:
+                logger.info(
+                    "Control command reapplied speed %s to the active reader session",
+                    current_speed,
+                )
                 return self._state_response()
             logger.info("SET SPEED was a no-op after clamping")
             return None
@@ -599,7 +623,9 @@ class DiscordWorker:
                 lines.append(_normalize_message_text(content))
 
             if not lines:
-                logger.debug("No textual messages to include in prompt for %s", state.name)
+                logger.debug(
+                    "No textual messages to include in prompt for %s", state.name
+                )
                 return result
 
             prompt = "\n".join(lines)
@@ -616,7 +642,9 @@ class DiscordWorker:
 
             reply = reply[: self.config.llm_reply_max_chars].strip()
             if not reply:
-                logger.info("Reply was empty after truncation for channel %s", state.name)
+                logger.info(
+                    "Reply was empty after truncation for channel %s", state.name
+                )
                 return result
 
             self._post_message(state.channel_id, reply)
@@ -630,7 +658,9 @@ class DiscordWorker:
         except urllib.error.HTTPError as exc:
             detail, retry_after = self._http_error_details(exc)
             if exc.code == 429:
-                logger.warning("Discord rate limited on channel %s: %s", state.name, detail)
+                logger.warning(
+                    "Discord rate limited on channel %s: %s", state.name, detail
+                )
                 result.retry_after_sec = retry_after
                 return result
             logger.error("Discord channel poll failed for %s: %s", state.name, detail)

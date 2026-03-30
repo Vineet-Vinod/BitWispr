@@ -5,7 +5,7 @@ import logging
 import threading
 from pathlib import Path
 
-from trillim import LLM, Runtime, STT, TTS
+from trillim import LLM, STT, TTS, Runtime
 
 from bitwispr.audio import MicrophoneRecorder, SpeechPlayer, audio_to_wav_bytes
 from bitwispr.config import AppConfig, StateStore, load_env_file
@@ -28,12 +28,13 @@ class BitWisprApp:
         self.state_store = state_store
         self.wayland = is_wayland_session()
         self.recorder = MicrophoneRecorder(sample_rate=config.input_sample_rate)
-        self.player = SpeechPlayer(self.runtime.tts.synthesize_stream)
+        self.player = SpeechPlayer(self.runtime.tts.speak)
         self.discord = DiscordWorker(
             config,
             state_store,
             llm_chat=self.runtime.llm.chat,
             list_voices=self.runtime.tts.list_voices,
+            on_speed_change=self.update_reader_speed,
         )
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1,
@@ -54,6 +55,7 @@ class BitWisprApp:
             run_hotkey_loop(
                 on_dictation=self.toggle_dictation,
                 on_reader=self.read_current_selection,
+                on_pause_toggle=self.toggle_reader_pause,
                 stop_event=self._shutdown,
                 wayland=self.wayland,
                 keyboard_scan_interval_sec=self.config.keyboard_scan_interval_sec,
@@ -111,14 +113,33 @@ class BitWisprApp:
             voice=state.voice,
             speed=state.speed,
         ):
-            logger.warning("Reader play request was rejected because the text was empty")
+            logger.warning(
+                "Reader play request was rejected because the text was empty"
+            )
+
+    def toggle_reader_pause(self) -> None:
+        result = self.player.toggle_pause()
+        if result == "paused":
+            logger.info("Paused active reader playback")
+        elif result == "resumed":
+            logger.info("Resumed active reader playback")
+
+    def update_reader_speed(self, speed: float) -> bool:
+        if self.player.set_speed(speed):
+            logger.info("Updated active reader playback speed to %s", speed)
+            return True
+        return False
 
     def _start_recording(self) -> None:
         if self._transcription_in_progress():
-            logger.warning("Ignoring dictation start while transcription is in progress")
+            logger.warning(
+                "Ignoring dictation start while transcription is in progress"
+            )
             return
         if not self.recorder.begin_recording():
-            logger.warning("Ignoring dictation start because recording is already active")
+            logger.warning(
+                "Ignoring dictation start because recording is already active"
+            )
             return
         logger.info("Recording started. Press Right Ctrl + Right Alt again to stop.")
 
@@ -182,6 +203,7 @@ class BitWisprApp:
             print("Discord control: disabled (.env not configured)")
         print("Hotkey: Right Ctrl + Right Alt toggles dictation")
         print("Hotkey: Right Ctrl + Right Shift reads the current selection")
+        print("Hotkey: Right Alt + P pauses or resumes active reader playback")
         print()
 
 
