@@ -73,11 +73,11 @@ def type_text(text: str, *, wayland: bool) -> bool:
 
     commands = (
         [
-            ["ydotool", "type", "--", text],
-            ["wtype", "--", text],
+            ["wtype", "-d", "5", "--", text],
+            ["ydotool", "type", "--delay", "5", "--key-delay", "5", "--", text],
         ]
         if wayland
-        else [["xdotool", "type", "--clearmodifiers", "--", text]]
+        else [["xdotool", "type", "--delay", "5", "--clearmodifiers", "--", text]]
     )
 
     for command in commands:
