@@ -47,12 +47,18 @@ class DiscordWorker:
         state_store: StateStore,
         *,
         llm_chat,
+        llm_activate,
+        llm_deactivate,
+        llm_is_active,
         list_voices,
         on_speed_change=None,
     ):
         self.config = config
         self.state_store = state_store
         self._llm_chat = llm_chat
+        self._llm_activate = llm_activate
+        self._llm_deactivate = llm_deactivate
+        self._llm_is_active = llm_is_active
         self._list_voices = list_voices
         self._on_speed_change = on_speed_change
         self.stop_event = threading.Event()
@@ -109,13 +115,15 @@ class DiscordWorker:
         self._sync_channel_states(time.monotonic(), reset_schedule=True)
 
         while not self.stop_event.is_set():
-            responder_active = self.state_store.snapshot().responder_active
+            snapshot = self.state_store.snapshot()
+            responder_active = snapshot.responder_active
+            llm_active = self._safe_llm_active()
             next_channel_at = (
                 min(
                     (state.next_poll_at for state in self.channel_states.values()),
                     default=float("inf"),
                 )
-                if responder_active
+                if responder_active and llm_active
                 else float("inf")
             )
             due_at = min(self.control_next_poll_at, next_channel_at)
@@ -130,10 +138,16 @@ class DiscordWorker:
                 self.control_next_poll_at = now + self.config.control_poll_interval_sec
 
             self._sync_channel_states(time.monotonic())
-            if not self.state_store.snapshot().responder_active:
+            snapshot = self.state_store.snapshot()
+            responder_active = snapshot.responder_active
+            llm_active = self._safe_llm_active()
+            if not responder_active:
                 logger.debug(
                     "Discord responder is stopped; skipping response-channel polls"
                 )
+                continue
+            if not llm_active:
+                logger.debug("Discord LLM is inactive; skipping response-channel polls")
                 continue
 
             now = time.monotonic()
@@ -298,7 +312,26 @@ class DiscordWorker:
         errors: list[str] | None = None,
         extra: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        return self.state_store.payload(errors=errors, extra=extra)
+        payload = self.state_store.payload(errors=errors, extra=extra)
+        payload["llm_active"] = self._safe_llm_active()
+        return payload
+
+    def _safe_llm_active(self) -> bool:
+        try:
+            return bool(self._llm_is_active())
+        except Exception:
+            logger.exception("Failed to read LLM activation state")
+            return False
+
+    def _reset_response_cursors(self, now: float) -> None:
+        if not self.channel_states:
+            return
+        for state in self.channel_states.values():
+            state.last_seen_id = None
+            state.next_poll_at = now
+            state.interval_sec = self.config.responder_poll_interval_sec
+            state.idle_polls = 0
+        logger.info("Reset response-channel cursors after LLM activation")
 
     def _format_json_message(self, payload: dict[str, object]) -> str:
         pretty = json.dumps(payload, indent=2, sort_keys=True)
@@ -417,8 +450,8 @@ class DiscordWorker:
                         "ADD CHANNEL <channel_id> <name> - add a response channel",
                         "LIST CHANNEL - list configured response channels",
                         "DELETE CHANNEL <name> - delete a configured channel by name",
-                        "START - enable the Discord responder",
-                        "STOP - disable the Discord responder",
+                        "START - enable the Discord responder and load the LLM",
+                        "STOP - disable the Discord responder and unload the LLM",
                         "SET SPEED <float_value> - clamp to [0.25, 4.0] and set TTS speed",
                         "HELP - print this command list",
                     ]
@@ -439,18 +472,48 @@ class DiscordWorker:
             return self._state_response()
 
         if upper == "START":
-            if self.state_store.set_responder_active(True):
-                logger.info("Control command matched START; responder enabled")
-                self._sync_channel_states(time.monotonic(), reset_schedule=True)
+            responder_changed = self.state_store.set_responder_active(True)
+            llm_changed = False
+            try:
+                llm_changed = self._llm_activate()
+            except Exception as exc:
+                logger.exception("START failed while activating LLM")
+                return self._state_response(errors=[str(exc)])
+            if responder_changed or llm_changed:
+                logger.info(
+                    "Control command matched START; responder_enabled=%s llm_enabled=%s",
+                    responder_changed,
+                    llm_changed,
+                )
+                now = time.monotonic()
+                if responder_changed or llm_changed:
+                    self._sync_channel_states(now, reset_schedule=True)
+                if llm_changed:
+                    self._reset_response_cursors(now)
                 return self._state_response()
-            logger.info("Control command START was a no-op; responder already enabled")
+            logger.info(
+                "Control command START was a no-op; responder and LLM already enabled"
+            )
             return None
 
         if upper == "STOP":
-            if self.state_store.set_responder_active(False):
-                logger.info("Control command matched STOP; responder disabled")
+            responder_changed = self.state_store.set_responder_active(False)
+            llm_changed = False
+            try:
+                llm_changed = self._llm_deactivate()
+            except Exception as exc:
+                logger.exception("STOP failed while deactivating LLM")
+                return self._state_response(errors=[str(exc)])
+            if responder_changed or llm_changed:
+                logger.info(
+                    "Control command matched STOP; responder_disabled=%s llm_disabled=%s",
+                    responder_changed,
+                    llm_changed,
+                )
                 return self._state_response()
-            logger.info("Control command STOP was a no-op; responder already disabled")
+            logger.info(
+                "Control command STOP was a no-op; responder and LLM already disabled"
+            )
             return None
 
         if upper.startswith("SET VOICE "):
@@ -635,6 +698,12 @@ class DiscordWorker:
                 len(lines) - 1,
                 len(prompt),
             )
+            if not self._safe_llm_active():
+                logger.info(
+                    "Skipping reply for channel %s because the LLM is inactive",
+                    state.name,
+                )
+                return result
             reply = self._llm_chat([{"role": "user", "content": prompt}]).strip()
             if not reply:
                 logger.info("LLM returned an empty reply for channel %s", state.name)
