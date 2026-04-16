@@ -5,11 +5,12 @@ import logging
 import threading
 from pathlib import Path
 
-from trillim import LLM, STT, TTS, Runtime
+from trillim import STT, TTS, Runtime
 
 from bitwispr.audio import MicrophoneRecorder, SpeechPlayer, audio_to_wav_bytes
 from bitwispr.config import AppConfig, StateStore, load_env_file
 from bitwispr.discord import DiscordWorker
+from bitwispr.llm_controller import LLMController
 from bitwispr.linux_platform import (
     is_wayland_session,
     read_selected_text,
@@ -22,17 +23,27 @@ logger = logging.getLogger(__name__)
 
 
 class BitWisprApp:
-    def __init__(self, config: AppConfig, runtime: Runtime, state_store: StateStore):
+    def __init__(
+        self,
+        config: AppConfig,
+        runtime: Runtime,
+        state_store: StateStore,
+        llm_controller: LLMController,
+    ):
         self.config = config
         self.runtime = runtime
         self.state_store = state_store
+        self.llm_controller = llm_controller
         self.wayland = is_wayland_session()
         self.recorder = MicrophoneRecorder(sample_rate=config.input_sample_rate)
         self.player = SpeechPlayer(self.runtime.tts.speak)
         self.discord = DiscordWorker(
             config,
             state_store,
-            llm_chat=self.runtime.llm.chat,
+            llm_chat=self.llm_controller.chat,
+            llm_activate=self.llm_controller.activate,
+            llm_deactivate=self.llm_controller.deactivate,
+            llm_is_active=self.llm_controller.is_active,
             list_voices=self.runtime.tts.list_voices,
             on_speed_change=self.update_reader_speed,
         )
@@ -71,6 +82,7 @@ class BitWisprApp:
         self.discord.stop()
         self.recorder.close()
         self.player.close()
+        self.llm_controller.shutdown()
 
         future = self._transcription_future
         if future is not None and not future.done():
@@ -195,6 +207,7 @@ class BitWisprApp:
         print(f"Input sample rate: {self.recorder.sample_rate} Hz")
         print(f"Model ID: {self.config.model_id}")
         print(f"Adapter ID: {self.config.adapter_id}")
+        print("LLM state: inactive on startup; use START from Discord control")
         print(f"TTS voice: {state.voice}")
         print(f"TTS speed: {state.speed}")
         if self.discord.enabled:
@@ -224,19 +237,16 @@ def main() -> int:
         )
         state = state_store.snapshot()
         logger.info(
-            "Starting Trillim runtime with model=%s adapter=%s voice=%s speed=%s",
-            config.model_id,
-            config.adapter_id,
+            "Starting Trillim runtime with voice=%s speed=%s; LLM starts inactive",
             state.voice,
             state.speed,
         )
         with Runtime(
-            LLM(config.model_id, lora_dir=config.adapter_id),
             STT(),
             TTS(default_voice=state.voice, speed=state.speed),
         ) as runtime:
             logger.info("Trillim runtime started")
-            app = BitWisprApp(config, runtime, state_store)
+            app = BitWisprApp(config, runtime, state_store, LLMController(config))
             app.run()
     except KeyboardInterrupt:
         logger.info("Exiting on keyboard interrupt")
