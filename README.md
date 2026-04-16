@@ -11,7 +11,7 @@ The app uses the Trillim Python SDK directly for:
 
 - `STT()` for dictation
 - `TTS()` for reader playback
-- `LLM("Trillim/BitNet-TRNQ", lora_dir="Trillim/BitNet-GenZ-LoRA-TRNQ")` for Discord replies
+- `LLM("Trillim/BitNet-TRNQ", lora_dir="Trillim/BitNet-GenZ-LoRA-TRNQ")` for Discord replies when activated
 
 Only OS integration and Discord REST polling are custom.
 
@@ -44,7 +44,9 @@ Supported commands:
 - `SET SPEED <float_value>`
 
 Mutable state is persisted to a local JSON file, so voice, speed, active/stopped
-status, and channel mappings survive restarts.
+status, and channel mappings survive restarts. LLM activation is not persisted:
+every app start begins with the LLM inactive, and Discord replies remain disabled
+until you send `START`.
 
 ## Discord Responder
 
@@ -65,6 +67,8 @@ logged_in_user:
 ```
 
 If the newest message was sent by the logged-in user, BitWispr does nothing.
+If the LLM is inactive, BitWispr still polls the control channel but skips reply
+generation for response channels.
 
 ## Linux Dependencies
 
