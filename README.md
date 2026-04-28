@@ -9,9 +9,10 @@ BitWispr is one local background app with three features:
 
 The app uses the Trillim Python SDK directly for:
 
-- `STT()` for dictation
-- `TTS()` for reader playback
-- `LLM("Trillim/BitNet-TRNQ", lora_dir="Trillim/BitNet-GenZ-LoRA-TRNQ")` for Discord replies when activated
+- `Runtime(STT(), TTS())` for dictation and reader playback
+- `runtime.stt.open_session().transcribe(...)` for dictation
+- `runtime.tts.open_session(voice=..., speed=...).synthesize(...)` for reader playback
+- `Runtime(LLM("Trillim/BitNet-TRNQ", lora_dir="Trillim/BitNet-GenZ-LoRA-TRNQ"))` plus `open_session().collect(...)` for Discord replies when activated
 
 Only OS integration and Discord REST polling are custom.
 

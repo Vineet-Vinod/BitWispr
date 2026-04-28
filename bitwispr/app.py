@@ -36,7 +36,7 @@ class BitWisprApp:
         self.llm_controller = llm_controller
         self.wayland = is_wayland_session()
         self.recorder = MicrophoneRecorder(sample_rate=config.input_sample_rate)
-        self.player = SpeechPlayer(self.runtime.tts.speak)
+        self.player = SpeechPlayer(self.runtime.tts)
         self.discord = DiscordWorker(
             config,
             state_store,
@@ -182,10 +182,11 @@ class BitWisprApp:
         try:
             wav_bytes = audio_to_wav_bytes(audio, self.recorder.sample_rate)
             logger.info("Starting STT transcription (%s bytes WAV)", len(wav_bytes))
-            text = self.runtime.stt.transcribe_bytes(
-                wav_bytes,
-                language=self.config.whisper_language,
-            ).strip()
+            with self.runtime.stt.open_session() as session:
+                text = session.transcribe(
+                    wav_bytes,
+                    language=self.config.whisper_language,
+                ).strip()
         except Exception:
             logger.exception("Transcription failed")
             return
@@ -243,7 +244,7 @@ def main() -> int:
         )
         with Runtime(
             STT(),
-            TTS(default_voice=state.voice, speed=state.speed),
+            TTS(),
         ) as runtime:
             logger.info("Trillim runtime started")
             app = BitWisprApp(config, runtime, state_store, LLMController(config))

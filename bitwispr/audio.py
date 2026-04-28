@@ -11,7 +11,7 @@ import numpy as np
 import sounddevice as sd
 
 try:
-    from trillim.components.tts.public import PCM_CHANNELS, PCM_SAMPLE_RATE
+    from trillim.components.tts._limits import PCM_CHANNELS, PCM_SAMPLE_RATE
 except Exception:
     PCM_CHANNELS = 1
     PCM_SAMPLE_RATE = 24000
@@ -338,9 +338,39 @@ class _BufferedSpeechController:
         return b"".join(parts)
 
 
+class _TrillimSpeechStream:
+    def __init__(self, tts, text: str, *, voice: str | None, speed: float | None):
+        self._session = tts.open_session(voice=voice, speed=speed)
+        self._iterator = self._session.synthesize(text)
+
+    @property
+    def state(self) -> str:
+        return self._session.state
+
+    def __iter__(self):
+        return self._iterator
+
+    def pause(self) -> None:
+        self._session.pause()
+
+    def resume(self) -> None:
+        self._session.resume()
+
+    def set_speed(self, speed: float) -> None:
+        self._session.set_speed(speed)
+
+    def close(self) -> None:
+        try:
+            close = getattr(self._iterator, "close", None)
+            if close is not None:
+                close()
+        finally:
+            self._session.close()
+
+
 class SpeechPlayer:
-    def __init__(self, speak_fn):
-        self._speak_fn = speak_fn
+    def __init__(self, tts):
+        self._tts = tts
         self._queue: queue.Queue[tuple[int, str, str | None, float | None] | None] = (
             queue.Queue()
         )
@@ -426,7 +456,12 @@ class SpeechPlayer:
                 )
                 controller = _BufferedSpeechController(
                     generation=generation,
-                    session=self._speak_fn(text, voice=voice, speed=speed),
+                    session=_TrillimSpeechStream(
+                        self._tts,
+                        text,
+                        voice=voice,
+                        speed=speed,
+                    ),
                     frame_bytes=self._frame_bytes,
                     pause_buffer_bytes=self._pause_buffer_bytes,
                     max_buffer_bytes=self._max_buffer_bytes,

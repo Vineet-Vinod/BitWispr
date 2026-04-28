@@ -67,10 +67,35 @@ class LLMController:
             runtime = self._runtime
             if runtime is None:
                 raise RuntimeError("LLM is inactive")
-            return runtime.llm.chat(messages)
+            if not messages:
+                raise ValueError("LLM chat requires at least one message")
+
+            *history, final_message = messages
+            final_content = self._message_content(final_message)
+            with runtime.llm.open_session() as session:
+                for message in history:
+                    session.append_message(
+                        self._message_role(message),
+                        self._message_content(message),
+                    )
+                return session.collect(final_content)
 
     def shutdown(self) -> None:
         try:
             self.deactivate()
         except Exception:
             logger.exception("LLM shutdown failed")
+
+    @staticmethod
+    def _message_role(message: dict[str, object]) -> str:
+        role = message.get("role", "user")
+        if not isinstance(role, str):
+            return "user"
+        return role
+
+    @staticmethod
+    def _message_content(message: dict[str, object]) -> str:
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return content
+        return str(content)
