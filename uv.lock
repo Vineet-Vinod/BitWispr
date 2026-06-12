@@ -116,7 +116,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "pynput" },
     { name = "sounddevice" },
-    { name = "trillim", extras = ["voice"], specifier = "==0.10.1" },
+    { name = "trillim", extras = ["voice"], specifier = "==0.12.2" },
 ]
 
 [[package]]
@@ -2053,7 +2053,7 @@ wheels = [
 
 [[package]]
 name = "trillim"
-version = "0.10.1"
+version = "0.12.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ddgs" },
@@ -2066,12 +2066,12 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/07/8fdc9dc907536ee94d530ec7ee82a6a3a8afe39e3d4fd6e4acfb800587b7/trillim-0.10.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:a5ea96912c6a3fa974e599c327ae5e5194c2d8f68c8832d34aa0ed2ff0f96803", size = 1299216, upload-time = "2026-04-28T05:10:47.864Z" },
-    { url = "https://files.pythonhosted.org/packages/e3/68/ab3552e59f08b493e14db09047df195cdc5fdc8cb37e2e3ab04b0c7a033d/trillim-0.10.1-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:51a95193155524b2b93b3c5e1a0f56ad7126ba66b29669a8d904bb50373d5add", size = 1292092, upload-time = "2026-04-28T05:10:55.515Z" },
-    { url = "https://files.pythonhosted.org/packages/a4/5a/812ad175aa681ac055bd3f2b4a03c3343907ae60408f727064e22560b4df/trillim-0.10.1-py3-none-manylinux_2_27_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1dd27724908dbe80ca64293e1b140467aa175f355c447c8569c6ac2ea617d39d", size = 5057254, upload-time = "2026-04-28T05:10:50.818Z" },
-    { url = "https://files.pythonhosted.org/packages/9d/86/4b5d03c6cecfa31b750d0cb4602370040f426fbc4f1cab5ed666449e05d4/trillim-0.10.1-py3-none-manylinux_2_27_x86_64.manylinux2014_x86_64.whl", hash = "sha256:63f738b76bf6a88ede679f21b4ef2fe87931c7ca53da6c49f3589e50e2aafa69", size = 5040871, upload-time = "2026-04-28T05:10:45.754Z" },
-    { url = "https://files.pythonhosted.org/packages/a0/d8/9048aa7630e4d887bdcb88f3a59f8ba7bc2a555af5d85a1e9520d09726f9/trillim-0.10.1-py3-none-win_amd64.whl", hash = "sha256:140471e29a3923010dc08b43dd38b1b970bc6ea4d7b305f30932a9e643d0e5b7", size = 1596183, upload-time = "2026-04-28T05:10:57.629Z" },
-    { url = "https://files.pythonhosted.org/packages/e1/8b/09d20cf011b55bc804733fe71390ffb2f1f0a6281019629c03a560fe7247/trillim-0.10.1-py3-none-win_arm64.whl", hash = "sha256:158e5f3810583685f785ac1c63d09b2b1b28e97e950ca3a40d9cc64e520e7944", size = 1508325, upload-time = "2026-04-28T05:10:53.082Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/6e/dabd550a66fca60a88e07165ca6799b56789943a91bf6af241af96e88ad6/trillim-0.12.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:155bed5e7c8cd8ff1d0c89b9a5ddea60b074f19ff13c4c1e417f6cfd159019ff", size = 1617433, upload-time = "2026-06-12T02:44:04.375Z" },
+    { url = "https://files.pythonhosted.org/packages/01/a8/3618741eb796fda791211fdda4608c4b58f2308871f73d3dd470579f7de1/trillim-0.12.2-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:3642c98fb461bbc3ac79b3ff3de8a49097cb9a716b17616b8421ded0949a1d0a", size = 1604019, upload-time = "2026-06-12T02:43:57.862Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/66/61bb95abef61b0cf348d1fb624bb1f7adabf51e13f2922877d94053f7ab4/trillim-0.12.2-py3-none-manylinux_2_27_aarch64.manylinux2014_aarch64.whl", hash = "sha256:106af499fdb4bef7e3f80bc1548b2774c6cbe788e43b04de5390d9c2fcba07cb", size = 7259998, upload-time = "2026-06-12T02:43:53.905Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/a9/99bdb81411c95202a13dcb3809c3e508998525b42226400116b1ceb1f48c/trillim-0.12.2-py3-none-manylinux_2_27_x86_64.manylinux2014_x86_64.whl", hash = "sha256:3d14d2bf8a4db25c71256fcffd708735f5f47ddf6ecc4f50599c204d7635d208", size = 7201725, upload-time = "2026-06-12T02:44:02.116Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/66/96c5f7f5cccff8c3335908f63c50bfef0c0bae5e0bb81a144735499faa02/trillim-0.12.2-py3-none-win_amd64.whl", hash = "sha256:2d5d219eaacdec2cf66b887bffa223fd518704a1bf4417949cd8ce77dd31d495", size = 2047245, upload-time = "2026-06-12T02:44:06.636Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/5c/b0b1138ae2d2a5a1252605891fe5db6e72254c4d8457258fa3da25d6bffc/trillim-0.12.2-py3-none-win_arm64.whl", hash = "sha256:d729c39b0d11d108b8e77a5b4c3fbe7a25772d22bfb261a676feafaf0f566171", size = 1920378, upload-time = "2026-06-12T02:43:56.063Z" },
 ]
 
 [package.optional-dependencies]
